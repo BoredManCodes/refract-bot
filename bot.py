@@ -1,5 +1,6 @@
 import asyncio
 import hmac
+import io
 import json
 import logging
 import os
@@ -15,6 +16,7 @@ from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
 
+import welcome
 from db import DB, iso, now
 from tally import tally
 
@@ -34,6 +36,7 @@ db.default("admin_role_id", os.environ.get("ADMIN_ROLE_ID"))
 db.default("member_role_id", os.environ.get("MEMBER_ROLE_ID"))
 db.default("linked_role_id", os.environ.get("LINKED_ROLE_ID"))
 db.default("announcements_channel_id", os.environ.get("ANNOUNCEMENTS_CHANNEL_ID"))
+db.default("welcome_channel_id", os.environ.get("WELCOME_CHANNEL_ID"))
 
 intents = discord.Intents.default()
 intents.members = True
@@ -589,6 +592,23 @@ async def invites_top(interaction: discord.Interaction):
     await interaction.response.send_message(text, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
+_welcome_tasks = set()
+
+
+async def welcome_gif(member):
+    avatar = await member.display_avatar.replace(size=512, format="png").read()
+    return await welcome.make_gif(avatar, member.display_name, member.name)
+
+
+async def send_welcome(member, channel_key="welcome_channel_id"):
+    try:
+        gif = await welcome_gif(member)
+        await post(member.guild, channel_key, content=f"Welcome to Refract SMP, {member.mention}!",
+                   file=discord.File(io.BytesIO(gif), "welcome.gif"))
+    except Exception:
+        log.exception("welcome gif failed for %s", member.id)
+
+
 @bot.event
 async def on_member_join(member):
     if member.guild.id != GUILD_ID:
@@ -603,6 +623,10 @@ async def on_member_join(member):
                     (f"Unknown (`{code}`)" if code else "Unknown"))
     embed.set_footer(text=f"ID {member.id}")
     await post(member.guild, "modlog_channel_id", embed=embed)
+    if not member.bot:
+        task = asyncio.create_task(send_welcome(member))  # render takes seconds; keep the join handler free
+        _welcome_tasks.add(task)
+        task.add_done_callback(_welcome_tasks.discard)
 
 
 @bot.event
@@ -753,9 +777,35 @@ async def api_application(request):
     return web.json_response({"ok": True})
 
 
+async def api_welcome(request):
+    guild = bot.get_guild(GUILD_ID)
+    if guild is None:
+        return web.json_response({"error": "not ready"}, status=503)
+    try:
+        body = await request.json()
+        user_id = int(body["user_id"])
+        post_it = bool(body.get("post", False))
+    except Exception:
+        return web.json_response({"error": "Bad request."}, status=400)
+    try:
+        member = guild.get_member(user_id) or await guild.fetch_member(user_id)
+    except discord.NotFound:
+        return web.json_response({"error": "Not a member of this server."}, status=404)
+    if post_it:
+        await send_welcome(member)
+        return web.json_response({"ok": True})
+    try:
+        gif = await welcome_gif(member)
+    except Exception:
+        log.exception("welcome gif failed for %s", user_id)
+        return web.json_response({"error": "Could not render the GIF."}, status=500)
+    return web.Response(body=gif, content_type="image/gif")
+
+
 async def start_api():
     app = web.Application(middlewares=[api_auth], client_max_size=16 * 1024)
-    app.add_routes([web.get("/status", api_status), web.post("/applications", api_application)])
+    app.add_routes([web.get("/status", api_status), web.post("/applications", api_application),
+                    web.post("/welcome", api_welcome)])
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", API_PORT).start()
@@ -788,7 +838,7 @@ async def update(interaction: discord.Interaction):
         if code != 0:
             await run("git", "reset", "--hard", old)
             return await interaction.followup.send(f"pip install failed, rolled back:\n```{out[-1500:]}```")
-    code, out = await run(sys.executable, "-m", "py_compile", "bot.py", "db.py", "tally.py")
+    code, out = await run(sys.executable, "-m", "py_compile", "bot.py", "db.py", "tally.py", "welcome.py")
     if code != 0:
         await run("git", "reset", "--hard", old)
         return await interaction.followup.send(f"New code does not compile, rolled back:\n```{out[-1500:]}```")

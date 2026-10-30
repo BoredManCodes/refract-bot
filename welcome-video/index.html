@@ -1,0 +1,218 @@
+<!doctype html>
+<html
+  lang="en"
+  data-composition-variables='[{"id":"name","type":"string","label":"Display name","default":"BoredManPlays","maxLength":28},{"id":"bare","type":"boolean","label":"Template only (no avatar or name)","default":false}]'
+>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      :root {
+        --ground: #12101f;
+        --ground-lift: #1e1a38;
+        --ink: #ffffff;
+        --ink-dim: #a9a4c9;
+        --font-display: "Outfit", sans-serif;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--ground);
+      }
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        font-family: var(--font-display);
+        background: radial-gradient(ellipse 60% 70% at 70% 45%, var(--ground-lift), var(--ground) 70%);
+      }
+      .layer {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 1920px;
+        height: 1080px;
+      }
+      #optics svg {
+        width: 1920px;
+        height: 1080px;
+        overflow: visible;
+      }
+      .ray {
+        fill: none;
+        stroke-width: 9;
+        stroke-linecap: round;
+      }
+      #beam {
+        stroke: #fff;
+        stroke-width: 10;
+        stroke-linecap: round;
+        filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.7));
+      }
+      #prism-shape {
+        fill: #26223f;
+        stroke: #fff;
+        stroke-width: 10;
+        stroke-linejoin: miter;
+        filter: drop-shadow(0 0 14px rgba(255, 255, 255, 0.35));
+      }
+      #portrait {
+        left: 1090px;
+        top: 220px;
+        width: 480px;
+        height: 480px;
+      }
+      #ring {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 480px;
+        height: 480px;
+        border-radius: 50%;
+        background: conic-gradient(from 0deg, #ff5c7a, #ffb347, #ffe066, #5be37d, #4fc3ff, #b57cff, #ff5c7a);
+        box-shadow: 0 0 60px rgba(181, 124, 255, 0.35);
+      }
+      #avatar-wrap {
+        position: absolute;
+        left: 14px;
+        top: 14px;
+        width: 452px;
+        height: 452px;
+        border-radius: 50%;
+        overflow: hidden;
+        background: var(--ground);
+      }
+      #avatar {
+        width: 452px;
+        height: 452px;
+        object-fit: cover;
+        display: block;
+      }
+      #copy {
+        left: 790px;
+        top: 745px;
+        width: 1080px;
+        height: 220px;
+        text-align: center;
+      }
+      #eyebrow {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 1080px;
+        font-size: 34px;
+        font-weight: 500;
+        letter-spacing: 0.32em;
+        color: var(--ink-dim);
+      }
+      #user {
+        position: absolute;
+        left: 0;
+        top: 52px;
+        width: 1080px;
+        font-size: 104px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        line-height: 1.1;
+        color: var(--ink);
+        white-space: nowrap;
+      }
+      #server {
+        position: absolute;
+        left: 0;
+        top: 178px;
+        width: 1080px;
+        font-size: 34px;
+        font-weight: 500;
+        letter-spacing: 0.32em;
+        color: var(--ink-dim);
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="6.5"
+      data-width="1920"
+      data-height="1080"
+    >
+      <div id="optics" class="layer clip" data-start="0" data-duration="6.5" data-track-index="0" style="z-index: 1">
+        <svg viewBox="0 0 1920 1080" xmlns="http://www.w3.org/2000/svg">
+          <g id="rays">
+            <line class="ray" id="ray1" x1="800" y1="470" x2="1860" y2="170" stroke="#ff5c7a" pathLength="1" style="filter: drop-shadow(0 0 10px #ff5c7a)" />
+            <line class="ray" id="ray2" x1="800" y1="470" x2="1860" y2="290" stroke="#ffb347" pathLength="1" style="filter: drop-shadow(0 0 10px #ffb347)" />
+            <line class="ray" id="ray3" x1="800" y1="470" x2="1860" y2="410" stroke="#ffe066" pathLength="1" style="filter: drop-shadow(0 0 10px #ffe066)" />
+            <line class="ray" id="ray4" x1="800" y1="470" x2="1860" y2="530" stroke="#5be37d" pathLength="1" style="filter: drop-shadow(0 0 10px #5be37d)" />
+            <line class="ray" id="ray5" x1="800" y1="470" x2="1860" y2="630" stroke="#4fc3ff" pathLength="1" style="filter: drop-shadow(0 0 10px #4fc3ff)" />
+            <line class="ray" id="ray6" x1="800" y1="470" x2="1860" y2="720" stroke="#b57cff" pathLength="1" style="filter: drop-shadow(0 0 10px #b57cff)" />
+          </g>
+          <line id="beam" x1="60" y1="470" x2="640" y2="470" pathLength="1" />
+          <polygon id="prism-shape" points="700,250 560,620 840,620" pathLength="1" />
+        </svg>
+      </div>
+
+      <div id="portrait" class="layer clip" data-start="0" data-duration="6.5" data-track-index="1" style="z-index: 2">
+        <div id="ring"></div>
+        <div id="avatar-wrap"><img id="avatar" src="assets/avatar.png" alt="" /></div>
+      </div>
+
+      <div id="copy" class="layer clip" data-start="0" data-duration="6.5" data-track-index="2" style="z-index: 3">
+        <div id="eyebrow">WELCOME TO</div>
+        <div id="user" data-var-text="name">BoredManPlays</div>
+        <div id="server">REFRACT SMP</div>
+      </div>
+    </div>
+    <script>
+      const vars = window.__hyperframes.getVariables();
+      const name = String(vars.name || "BoredManPlays");
+      const userEl = document.getElementById("user");
+      userEl.textContent = name;
+      userEl.style.fontSize = Math.max(56, Math.min(104, Math.floor(1000 / (name.length * 0.58)))) + "px";
+
+      if (vars.bare === true || vars.bare === "true") {
+        document.getElementById("avatar-wrap").style.display = "none";
+        document.getElementById("copy").style.display = "none";
+      }
+
+      const rays = ["#ray1", "#ray2", "#ray3", "#ray4", "#ray5", "#ray6"];
+      const tl = gsap.timeline({ paused: true });
+
+      gsap.set("#optics line, #prism-shape", { strokeDasharray: 1 });
+      tl.set("#beam", { strokeDashoffset: 1 }, 0);
+      tl.set("#prism-shape", { strokeDashoffset: 1, fillOpacity: 0 }, 0);
+      tl.set(rays, { strokeDashoffset: 1, opacity: 1 }, 0);
+      tl.set("#ring", { scale: 0.7, opacity: 0, rotation: 0 }, 0);
+      tl.set("#avatar-wrap", { scale: 0.7, opacity: 0 }, 0);
+      tl.set(["#eyebrow", "#user", "#server"], { opacity: 0, y: 24 }, 0);
+
+      // white beam travels in
+      tl.to("#beam", { strokeDashoffset: 0, duration: 0.9, ease: "power2.in" }, 0.2);
+      // prism draws as the beam arrives
+      tl.to("#prism-shape", { strokeDashoffset: 0, duration: 0.6, ease: "power2.out" }, 0.85);
+      tl.to("#prism-shape", { fillOpacity: 1, duration: 0.3, ease: "none" }, 1.2);
+      // split into six rays
+      tl.to(rays, { strokeDashoffset: 0, duration: 0.75, ease: "power3.out", stagger: 0.07 }, 1.35);
+      // face appears where the rays cross
+      tl.to("#ring", { scale: 1, opacity: 1, duration: 0.6, ease: "back.out(1.6)" }, 2.0);
+      tl.to("#avatar-wrap", { scale: 1, opacity: 1, duration: 0.6, ease: "back.out(1.4)" }, 2.1);
+      tl.to("#ring", { rotation: 360, duration: 4.4, ease: "none" }, 2.1);
+      // copy
+      tl.to("#eyebrow", { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, 2.6);
+      tl.to("#user", { opacity: 1, y: 0, duration: 0.6, ease: "power3.out" }, 2.75);
+      tl.to("#server", { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, 3.0);
+
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>

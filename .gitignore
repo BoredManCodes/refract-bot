@@ -3,3 +3,7 @@
 *.db
 __pycache__/
 .pytest_cache/
+welcome-video/renders/
+welcome-video/.hyperframes/
+welcome-video/node_modules/
+welcome-video/assets/avatar.png
