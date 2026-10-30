@@ -674,37 +674,68 @@ async def on_interaction(interaction):
 
 # ---------- website API (the Worker calls in; loopback only, exposed by a tunnel) ----------
 
-_media_src = {}    # message id -> (discord url, kind); filled as the chat preview is built
-_media_bytes = {}  # message id -> (body, content type); small in-memory copy so Discord is hit once
+_media_src = {}    # media key -> (discord url, kind); filled as the chat preview is built
+_media_bytes = {}  # media key -> (body, content type); small in-memory copy so Discord is hit once
 MEDIA_MAX = 8 * 1024 * 1024
 
 
+def _reg(key, url, kind):
+    _media_src[key] = (url, kind)
+    return {"id": key, "kind": kind}
+
+
 def chat_media(m):
-    """First image/gif on a message as {"id", "kind"}, or None. The site loads it through /api/media/<id>, never from Discord."""
-    found = None
-    for a in m.attachments:
-        if (a.content_type or "").startswith("image/"):
-            found = (a.url, "image")
-            break
-    if not found:
-        for e in m.embeds:
-            if e.video and e.video.proxy_url:  # gifv embeds (Klipy, Tenor, Giphy) animate as a muted mp4
-                found = (e.video.proxy_url, "video")
-                break
-            img = e.image or e.thumbnail
-            if img and img.proxy_url:
-                found = (img.proxy_url, "image")
-                break
-    if not found:
-        return None
-    _media_src[m.id] = found
-    return {"id": str(m.id), "kind": found[1]}
+    """Image/gif/video on a message as {"id", "kind"}, or None. The site loads it through /api/media/<id>, never from Discord.
+    Rich embeds are sent separately by chat_embeds; this only covers attachments and link unfurls."""
+    for n, a in enumerate(m.attachments):
+        ctype = a.content_type or ""
+        if ctype.startswith(("image/", "video/")):
+            return _reg(f"{m.id}.a{n}", a.url, "video" if ctype.startswith("video/") else "image")
+    for n, e in enumerate(m.embeds):
+        if e.type == "rich":
+            continue
+        if e.video and e.video.proxy_url:  # gifv embeds (Klipy, Tenor, Giphy) animate as a muted mp4
+            return _reg(f"{m.id}.u{n}", e.video.proxy_url, "video")
+        img = e.image or e.thumbnail
+        if img and img.proxy_url:
+            return _reg(f"{m.id}.u{n}", img.proxy_url, "image")
+    return None
+
+
+def chat_more_media(m, first):
+    """Attachments beyond the first one chat_media picked."""
+    out = []
+    for n, a in enumerate(m.attachments):
+        ctype = a.content_type or ""
+        if ctype.startswith(("image/", "video/")) and not (first and first["id"] == f"{m.id}.a{n}"):
+            out.append(_reg(f"{m.id}.a{n}", a.url, "video" if ctype.startswith("video/") else "image"))
+    return out[:8]
+
+
+def chat_embeds(m):
+    """Rich embeds (bots, webhooks) with every visible part: title, text, fields, author, footer, images."""
+    out = []
+    for n, e in enumerate(m.embeds):
+        if e.type != "rich":
+            continue
+        img = e.image if e.image and e.image.proxy_url else None
+        thumb = e.thumbnail if e.thumbnail and e.thumbnail.proxy_url else None
+        out.append({
+            "title": e.title, "url": e.url, "description": (e.description or "")[:400] or None,
+            "color": f"#{e.colour.value:06x}" if e.colour else None,
+            "author": {"name": e.author.name, "icon": e.author.icon_url} if e.author and e.author.name else None,
+            "fields": [{"name": f.name[:100], "value": f.value[:200], "inline": f.inline} for f in e.fields[:10]],
+            "image": _reg(f"{m.id}.e{n}i", img.proxy_url, "image") if img else None,
+            "thumbnail": _reg(f"{m.id}.e{n}t", thumb.proxy_url, "image") if thumb else None,
+            "footer": e.footer.text if e.footer and e.footer.text else None,
+            "timestamp": e.timestamp.isoformat() if e.timestamp else None,
+        })
+    return out[:4]
 
 
 async def api_media(request):
-    try:
-        mid = int(request.match_info["id"])
-    except ValueError:
+    mid = request.match_info["id"]
+    if not re.fullmatch(r"\d+\.[aue]\d+[it]?", mid):
         return web.Response(status=404)
     if mid not in _media_bytes:
         src = _media_src.get(mid)
@@ -718,7 +749,7 @@ async def api_media(request):
                 ctype = r.headers.get("Content-Type", "").split(";")[0]
         if len(body) > MEDIA_MAX or not ctype.startswith(("image/", "video/")):
             return web.Response(status=502)
-        if len(_media_bytes) >= 40:
+        if len(_media_bytes) >= 80:
             _media_bytes.pop(next(iter(_media_bytes)))
         _media_bytes[mid] = (body, ctype)
     body, ctype = _media_bytes[mid]
@@ -763,13 +794,20 @@ async def build_status(guild):
             media = chat_media(m)
             if media:  # the link was only there to unfurl into the media, so hide it
                 text = re.sub(r"https?://\S+", "", text).strip()
-            if m.author.bot or not (text or media):
+            embeds = chat_embeds(m)
+            if not (text or media or embeds):
                 continue
+            reply = None
+            ref = m.reference.resolved if m.reference else None
+            if isinstance(ref, discord.Message):  # a deleted original arrives as DeletedReferencedMessage and is skipped
+                reply = {"who": ref.author.display_name,
+                         "text": (ref.clean_content.strip() or ("image" if ref.attachments or ref.embeds else ""))[:80]}
             tag = next((n for n, k in (("head", "head_role_id"), ("admin", "admin_role_id"), ("staff", "staff_role_id"))
                         if ids[k] and any(r.id == ids[k] for r in getattr(m.author, "roles", []))), "")
             general.append({"who": m.author.display_name, "role": tag,
                             "avatar": m.author.display_avatar.replace(size=128, format="png").url, "text": text[:240],
-                            "media": media, "when": m.created_at.isoformat()})
+                            "bot": m.author.bot, "media": media, "more_media": chat_more_media(m, media),
+                            "embeds": embeds, "reply": reply, "when": m.created_at.isoformat()})
             if len(general) == 30:
                 break
         general = general[::-1]
