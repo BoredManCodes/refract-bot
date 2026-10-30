@@ -602,12 +602,17 @@ async def welcome_gif(member, kind="welcome"):
 
 
 async def send_welcome(member, channel_key="welcome_channel_id", kind="welcome"):
-    text = {"welcome": f"Welcome to Refract SMP, {member.mention}!",
-            "leave": f"{discord.utils.escape_mentions(discord.utils.escape_markdown(member.display_name))} "
-                     "left without a trace."}[kind]
+    if kind == "welcome":
+        content, text, colour = member.mention, f"Welcome to Refract SMP, {member.mention}!", 0xB57CFF  # mention in content so it pings
+    else:
+        safe = discord.utils.escape_mentions(discord.utils.escape_markdown(member.display_name))
+        content, text, colour = None, f"{safe} left without a trace.", 0xFF5C7A
     try:
         gif = await welcome_gif(member, kind)
-        await post(member.guild, channel_key, content=text, file=discord.File(io.BytesIO(gif), f"{kind}.gif"))
+        embed = discord.Embed(description=text, colour=colour)
+        embed.set_image(url=f"attachment://{kind}.gif")
+        await post(member.guild, channel_key, content=content, embed=embed,
+                   file=discord.File(io.BytesIO(gif), f"{kind}.gif"))
     except Exception:
         log.exception("%s gif failed for %s", kind, member.id)
 
