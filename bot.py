@@ -5,6 +5,7 @@ import logging
 import os
 import random
 import re
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -759,6 +760,42 @@ async def start_api():
     await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", API_PORT).start()
     log.info("website API on 127.0.0.1:%s", API_PORT)
+
+
+# ---------- self-update ----------
+
+async def run(*args):
+    proc = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    out, _ = await proc.communicate()
+    return proc.returncode, out.decode(errors="replace").strip()
+
+
+@tree.command(name="update", description="Pull the latest code and restart (owner)", guild=GUILD)
+async def update(interaction: discord.Interaction):
+    if not await staff_only(interaction, owner=True):
+        return
+    await interaction.response.defer(ephemeral=True)
+    _, old = await run("git", "rev-parse", "HEAD")
+    code, out = await run("git", "pull", "--ff-only")
+    if code != 0:
+        return await interaction.followup.send(f"git pull failed:\n```{out[-1500:]}```", ephemeral=True)
+    _, new = await run("git", "rev-parse", "HEAD")
+    if new == old:
+        return await interaction.followup.send("Already up to date.", ephemeral=True)
+    _, changed = await run("git", "diff", "--name-only", old, new)
+    if "requirements.txt" in changed.split():
+        code, out = await run(sys.executable, "-m", "pip", "install", "-r", "requirements.txt")
+        if code != 0:
+            await run("git", "reset", "--hard", old)
+            return await interaction.followup.send(f"pip install failed, rolled back:\n```{out[-1500:]}```", ephemeral=True)
+    code, out = await run(sys.executable, "-m", "py_compile", "bot.py", "db.py", "tally.py")
+    if code != 0:
+        await run("git", "reset", "--hard", old)
+        return await interaction.followup.send(f"New code does not compile, rolled back:\n```{out[-1500:]}```", ephemeral=True)
+    _, summary = await run("git", "log", "--oneline", f"{old}..{new}")
+    await interaction.followup.send(f"Updated to `{new[:7]}`, restarting.\n```{summary[-1500:]}```", ephemeral=True)
+    await bot.close()
+    os.execv(sys.executable, [sys.executable, *sys.argv])
 
 
 # ---------- setup ----------
