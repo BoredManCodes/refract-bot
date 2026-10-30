@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import discord
+import aiohttp
 from aiohttp import web
 from discord import app_commands
 from discord.ext import tasks
@@ -668,6 +669,57 @@ async def build_status(guild):
         head = {"name": head_m.display_name,
                 "avatar": head_m.display_avatar.replace(size=128, format="png").url,
                 "term": db.term_count(head_m.id) or None,
+_media_src = {}    # message id -> (discord url, kind); filled as the chat preview is built
+_media_bytes = {}  # message id -> (body, content type); small in-memory copy so Discord is hit once
+MEDIA_MAX = 8 * 1024 * 1024
+
+
+def chat_media(m):
+    """First image/gif on a message as {"id", "kind"}, or None. The site loads it through /api/media/<id>, never from Discord."""
+    found = None
+    for a in m.attachments:
+        if (a.content_type or "").startswith("image/"):
+            found = (a.url, "image")
+            break
+    if not found:
+        for e in m.embeds:
+            if e.video and e.video.proxy_url:  # gifv embeds (Klipy, Tenor, Giphy) animate as a muted mp4
+                found = (e.video.proxy_url, "video")
+                break
+            img = e.image or e.thumbnail
+            if img and img.proxy_url:
+                found = (img.proxy_url, "image")
+                break
+    if not found:
+        return None
+    _media_src[m.id] = found
+    return {"id": str(m.id), "kind": found[1]}
+
+
+async def api_media(request):
+    try:
+        mid = int(request.match_info["id"])
+    except ValueError:
+        return web.Response(status=404)
+    if mid not in _media_bytes:
+        src = _media_src.get(mid)
+        if not src:
+            return web.Response(status=404)
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as http:
+            async with http.get(src[0]) as r:
+                if r.status != 200 or int(r.headers.get("Content-Length", 0)) > MEDIA_MAX:
+                    return web.Response(status=502)
+                body = await r.content.read(MEDIA_MAX + 1)
+                ctype = r.headers.get("Content-Type", "").split(";")[0]
+        if len(body) > MEDIA_MAX or not ctype.startswith(("image/", "video/")):
+            return web.Response(status=502)
+        if len(_media_bytes) >= 40:
+            _media_bytes.pop(next(iter(_media_bytes)))
+        _media_bytes[mid] = (body, ctype)
+    body, ctype = _media_bytes[mid]
+    return web.Response(body=body, content_type=ctype, headers={"Cache-Control": "public, max-age=86400"})
+
+
                 "since": term["started_at"] if term and term["user_id"] == head_m.id else None}
     election = None
     el = db.active_election()
@@ -693,7 +745,7 @@ async def build_status(guild):
     gch = discord.utils.find(lambda c: c.name.endswith("general"), guild.text_channels)
     if gch and gch.permissions_for(guild.default_role).view_channel:  # only ever publish a public channel
         ids = {k: db.get_int(k) for k in ("head_role_id", "admin_role_id", "staff_role_id")}
-        async for m in gch.history(limit=15):
+        async for m in gch.history(limit=60):
             text = m.clean_content.strip()
             if m.author.bot or not text:
                 continue
@@ -805,7 +857,7 @@ async def api_welcome(request):
 async def start_api():
     app = web.Application(middlewares=[api_auth], client_max_size=16 * 1024)
     app.add_routes([web.get("/status", api_status), web.post("/applications", api_application),
-                    web.post("/welcome", api_welcome)])
+                    web.post("/welcome", api_welcome), web.get("/media/{id}", api_media)])
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", API_PORT).start()
