@@ -50,6 +50,13 @@ CREATE TABLE IF NOT EXISTS ballots (
     election_id INTEGER NOT NULL,
     first INTEGER, second INTEGER, third INTEGER
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS invite_joins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    inviter_id INTEGER,
+    code TEXT,
+    joined_at TEXT NOT NULL
+);
 """
 
 
@@ -110,6 +117,24 @@ class DB:
         with self.c:
             self.c.execute("UPDATE applications SET status=?, decided_by=? WHERE id=? AND status='pending'",
                            (status, by, app_id))
+
+    # invites
+    def add_invite_join(self, user_id, inviter_id, code):
+        with self.c:
+            self.c.execute("INSERT INTO invite_joins (user_id, inviter_id, code, joined_at) VALUES (?,?,?,?)",
+                           (user_id, inviter_id, code, iso(now())))
+
+    def last_invite_join(self, user_id):
+        return self.c.execute("SELECT * FROM invite_joins WHERE user_id=? ORDER BY id DESC LIMIT 1", (user_id,)).fetchone()
+
+    def invited_by(self, inviter_id):
+        rows = self.c.execute("SELECT user_id FROM invite_joins WHERE inviter_id=? ORDER BY id DESC", (inviter_id,)).fetchall()
+        return [r["user_id"] for r in rows]
+
+    def top_inviters(self, limit=10):
+        rows = self.c.execute("SELECT inviter_id, COUNT(*) AS n FROM invite_joins WHERE inviter_id IS NOT NULL "
+                              "GROUP BY inviter_id ORDER BY n DESC LIMIT ?", (limit,)).fetchall()
+        return [(r["inviter_id"], r["n"]) for r in rows]
 
     # head admin terms
     def change_head(self, new_id, old_id=None, old_since=None):

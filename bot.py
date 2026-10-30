@@ -1,3 +1,4 @@
+import asyncio
 import hmac
 import json
 import logging
@@ -520,13 +521,85 @@ def command_line(data):
     return "/" + " ".join(parts)
 
 
+# ---------- invite tracking ----------
+
+# code -> (uses, max_uses, inviter_id). Discord has no "invite used" event, so each join is
+# matched by diffing use counts against this snapshot.
+invite_cache = {}
+invite_lock = asyncio.Lock()
+
+
+async def fetch_invites(guild):
+    try:
+        invites = await guild.invites()
+    except discord.Forbidden:
+        log.warning("missing Manage Server permission; invite tracking off")
+        return None
+    return {i.code: (i.uses or 0, i.max_uses or 0, i.inviter.id if i.inviter else None) for i in invites}
+
+
+async def match_invite(guild):
+    """Return (code, inviter_id) of the invite the newest member used, or (None, None) if unclear."""
+    async with invite_lock:
+        after = await fetch_invites(guild)
+        if after is None:
+            return None, None
+        before = dict(invite_cache)
+        invite_cache.clear()
+        invite_cache.update(after)
+    used = [c for c, (uses, _, _) in after.items() if uses > before.get(c, (0, 0, None))[0]]
+    # Single-use or capped invites vanish the moment they hit their limit.
+    used += [c for c, (uses, cap, _) in before.items() if c not in after and cap and uses == cap - 1]
+    if len(used) != 1:
+        return None, None
+    code = used[0]
+    return code, (after.get(code) or before[code])[2]
+
+
+@bot.event
+async def on_invite_create(invite):
+    if invite.guild and invite.guild.id == GUILD_ID:
+        invite_cache[invite.code] = (invite.uses or 0, invite.max_uses or 0, invite.inviter.id if invite.inviter else None)
+
+
+invites_group = app_commands.Group(name="invites", description="Invite tracking")
+
+
+@invites_group.command(name="who", description="Who invited a member")
+async def invites_who(interaction: discord.Interaction, member: discord.Member):
+    if not await staff_only(interaction):
+        return
+    row = db.last_invite_join(member.id)
+    if row is None:
+        text = f"No invite recorded for {member.mention}."
+    elif row["inviter_id"] is None:
+        text = f"{member.mention} joined on {discord.utils.format_dt(datetime.fromisoformat(row['joined_at']), 'D')}; the invite could not be identified."
+    else:
+        text = f"{member.mention} was invited by <@{row['inviter_id']}> (code `{row['code']}`)."
+    await interaction.response.send_message(text, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+
+@invites_group.command(name="top", description="Members who brought in the most joins")
+async def invites_top(interaction: discord.Interaction):
+    if not await staff_only(interaction):
+        return
+    rows = db.top_inviters()
+    text = "\n".join(f"{i}. <@{uid}>: {n}" for i, (uid, n) in enumerate(rows, 1)) or "Nothing recorded yet."
+    await interaction.response.send_message(text, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+
 @bot.event
 async def on_member_join(member):
     if member.guild.id != GUILD_ID:
         return
+    code, inviter_id = await match_invite(member.guild)
+    if not member.bot:
+        db.add_invite_join(member.id, inviter_id, code)
     embed = discord.Embed(title="Member joined", colour=discord.Colour.green(), timestamp=now(),
                           description=f"{member.mention} ({member})")
     embed.add_field(name="Account created", value=discord.utils.format_dt(member.created_at, "R"))
+    embed.add_field(name="Invited by", value=f"<@{inviter_id}> (`{code}`)" if inviter_id else
+                    (f"Unknown (`{code}`)" if code else "Unknown"))
     embed.set_footer(text=f"ID {member.id}")
     await post(member.guild, "modlog_channel_id", embed=embed)
 
@@ -733,6 +806,7 @@ async def setup_hook():
     bot.add_view(NominationView())
     bot.add_view(VoteLauncher())
     tree.add_command(election, guild=GUILD)
+    tree.add_command(invites_group, guild=GUILD)
     await tree.sync(guild=GUILD)
     scheduler.start()
     if API_TOKEN:
@@ -742,6 +816,10 @@ async def setup_hook():
 @bot.event
 async def on_ready():
     log.info("logged in as %s", bot.user)
+    guild = bot.get_guild(GUILD_ID)
+    if guild and (snapshot := await fetch_invites(guild)) is not None:
+        invite_cache.clear()
+        invite_cache.update(snapshot)
 
 
 if __name__ == "__main__":
