@@ -745,7 +745,11 @@ async def api_media(request):
             async with http.get(src[0]) as r:
                 if r.status != 200 or int(r.headers.get("Content-Length", 0)) > MEDIA_MAX:
                     return web.Response(status=502)
-                body = await r.content.read(MEDIA_MAX + 1)
+                body = b""
+                async for chunk in r.content.iter_chunked(64 * 1024):  # content.read(n) returns a partial body
+                    body += chunk
+                    if len(body) > MEDIA_MAX:
+                        break
                 ctype = r.headers.get("Content-Type", "").split(";")[0]
         if len(body) > MEDIA_MAX or not ctype.startswith(("image/", "video/")):
             return web.Response(status=502)
