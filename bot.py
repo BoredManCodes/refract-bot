@@ -628,6 +628,7 @@ async def on_member_join(member):
     if member.guild.id != GUILD_ID:
         return
     code, inviter_id = await match_invite(member.guild)
+    db.drop_departure(member.id)
     if not member.bot:
         db.add_invite_join(member.id, inviter_id, code)
     embed = discord.Embed(title="Member joined", colour=discord.Colour.green(), timestamp=now(),
@@ -655,7 +656,56 @@ async def on_member_remove(member):
     embed.set_footer(text=f"ID {member.id}")
     await post(member.guild, "modlog_channel_id", embed=embed)
     if not member.bot:
+        await record_departure(member)
         spawn_welcome(member, "leave")
+
+
+async def record_departure(member):
+    """Work out whether a removal was a ban, a kick or the member leaving, and store it for the members page."""
+    kind, reason = "left", None
+    try:
+        await asyncio.sleep(2)  # let the audit log catch up
+        try:
+            ban = await member.guild.fetch_ban(discord.Object(id=member.id))
+            kind, reason = "banned", ban.reason
+        except discord.NotFound:
+            async for e in member.guild.audit_logs(limit=10, action=discord.AuditLogAction.kick):
+                if e.target and e.target.id == member.id and (now() - e.created_at).total_seconds() < 30:
+                    kind, reason = "kicked", e.reason
+                    break
+    except discord.HTTPException:
+        log.warning("could not read ban or audit log to classify departure of %s", member.id)
+    db.add_departure(member.id, member.display_name, member.display_avatar.replace(size=128, format="png").url,
+                     iso(member.joined_at) if member.joined_at else None, iso(now()), kind, reason)
+
+
+@bot.event
+async def on_member_unban(guild, user):
+    if guild.id == GUILD_ID and db.has_departure(user.id):
+        db.set_departure_kind(user.id, "unbanned")
+
+
+async def backfill_bans(guild):
+    """Add anyone on Discord's ban list who is not already recorded. Join time is unknown; the ban time comes from the audit log when it still has it."""
+    when = {}
+    try:
+        async for e in guild.audit_logs(limit=None, action=discord.AuditLogAction.ban):
+            if e.target and e.target.id not in when:
+                when[e.target.id] = e.created_at
+    except discord.HTTPException:
+        log.warning("audit log unavailable for ban backfill")
+    added = 0
+    try:
+        async for entry in guild.bans(limit=None):
+            u = entry.user
+            if u.bot or db.has_departure(u.id):
+                continue
+            db.add_departure(u.id, u.display_name, u.display_avatar.replace(size=128, format="png").url, None,
+                             iso(when[u.id]) if u.id in when else None, "banned", entry.reason)
+            added += 1
+    except discord.HTTPException:
+        log.warning("could not read the ban list")
+    log.info("ban backfill added %s", added)
 
 
 @bot.event
@@ -781,6 +831,15 @@ async def build_status(guild):
         election = {"label": "Nominations open in", "target": db.get("next_nominations")}
     linked = role(guild, "linked_role_id")
     team = {m.id for key in ("head_role_id", "admin_role_id", "staff_role_id") if (r := role(guild, key)) for m in r.members}
+    staff_list, listed = [], set()
+    ranks = [("owner", [m for m in guild.members if is_owner(m)])] + [
+        (tag, r.members if (r := role(guild, key)) else []) for tag, key in (("head", "head_role_id"), ("admin", "admin_role_id"), ("staff", "staff_role_id"))]
+    for tag, members in ranks:
+        for m in sorted(members, key=lambda x: x.display_name.lower()):
+            if m.bot or m.id in listed:
+                continue
+            listed.add(m.id)
+            staff_list.append({"name": m.display_name, "role": tag, "avatar": m.display_avatar.replace(size=128, format="png").url})
     entries = []
     log_ch = channel(guild, "log_channel_id")
     if log_ch:
@@ -816,7 +875,7 @@ async def build_status(guild):
                 break
         general = general[::-1]
     return {"members": guild.member_count, "linked": len(linked.members) if linked else None, "team": len(team),
-            "head": head, "election": election, "log": entries[:5], "general": general}
+            "staff": staff_list, "head": head, "election": election, "log": entries[:5], "general": general}
 
 
 async def handle_web_application(guild, item):
@@ -847,6 +906,23 @@ async def handle_web_application(guild, item):
 
 
 _status_cache = {"at": 0.0, "body": None}
+_members_cache = {"at": 0.0, "body": None}
+
+
+def build_members(guild):
+    head, admin, staff = (role(guild, k) for k in ("head_role_id", "admin_role_id", "staff_role_id"))
+    members = []
+    for m in guild.members:
+        if m.bot:
+            continue
+        tag = "owner" if is_owner(m) else "head" if head and head in m.roles else "admin" if admin and admin in m.roles \
+            else "staff" if staff and staff in m.roles else ""
+        members.append({"name": m.display_name, "avatar": m.display_avatar.replace(size=64, format="png").url,
+                        "joined": iso(m.joined_at) if m.joined_at else None, "role": tag})
+    members.sort(key=lambda x: x["joined"] or "9")
+    departed = [{"name": r["name"], "avatar": r["avatar"], "joined": r["joined_at"], "left": r["left_at"],
+                 "kind": r["kind"], "reason": r["reason"]} for r in db.departures()]
+    return {"members": members, "departed": departed, "generated": iso(now())}
 
 
 @web.middleware
@@ -866,6 +942,15 @@ async def api_status(request):
         body["generated"] = iso(now())
         _status_cache.update(at=time.monotonic(), body=body)
     return web.json_response(_status_cache["body"])
+
+
+async def api_members(request):
+    guild = bot.get_guild(GUILD_ID)
+    if guild is None:
+        return web.json_response({"error": "not ready"}, status=503)
+    if time.monotonic() - _members_cache["at"] > 60:
+        _members_cache.update(at=time.monotonic(), body=build_members(guild))
+    return web.json_response(_members_cache["body"])
 
 
 async def api_application(request):
@@ -920,7 +1005,7 @@ async def api_welcome(request):
 
 async def start_api():
     app = web.Application(middlewares=[api_auth], client_max_size=16 * 1024)
-    app.add_routes([web.get("/status", api_status), web.post("/applications", api_application),
+    app.add_routes([web.get("/status", api_status), web.get("/members", api_members), web.post("/applications", api_application),
                     web.post("/welcome", api_welcome), web.get("/media/{id}", api_media)])
     runner = web.AppRunner(app)
     await runner.setup()
@@ -1023,6 +1108,9 @@ async def on_ready():
     if guild and (snapshot := await fetch_invites(guild)) is not None:
         invite_cache.clear()
         invite_cache.update(snapshot)
+    if guild and not getattr(bot, "_backfilled", False):
+        bot._backfilled = True
+        await backfill_bans(guild)
 
 
 if __name__ == "__main__":

@@ -57,6 +57,15 @@ CREATE TABLE IF NOT EXISTS invite_joins (
     code TEXT,
     joined_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS departures (
+    user_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    avatar TEXT,
+    joined_at TEXT,
+    left_at TEXT,
+    kind TEXT NOT NULL,
+    reason TEXT
+);
 """
 
 
@@ -117,6 +126,26 @@ class DB:
         with self.c:
             self.c.execute("UPDATE applications SET status=?, decided_by=? WHERE id=? AND status='pending'",
                            (status, by, app_id))
+
+    # departures
+    def add_departure(self, user_id, name, avatar, joined_at, left_at, kind, reason):
+        with self.c:
+            self.c.execute("INSERT OR REPLACE INTO departures (user_id, name, avatar, joined_at, left_at, kind, reason) "
+                           "VALUES (?,?,?,?,?,?,?)", (user_id, name, avatar, joined_at, left_at, kind, reason))
+
+    def has_departure(self, user_id):
+        return self.c.execute("SELECT 1 FROM departures WHERE user_id=?", (user_id,)).fetchone() is not None
+
+    def drop_departure(self, user_id):
+        with self.c:
+            self.c.execute("DELETE FROM departures WHERE user_id=?", (user_id,))
+
+    def set_departure_kind(self, user_id, kind):
+        with self.c:
+            self.c.execute("UPDATE departures SET kind=?, reason=NULL WHERE user_id=?", (kind, user_id))
+
+    def departures(self):
+        return self.c.execute("SELECT * FROM departures ORDER BY left_at IS NULL, left_at DESC").fetchall()
 
     # invites
     def add_invite_join(self, user_id, inviter_id, code):
