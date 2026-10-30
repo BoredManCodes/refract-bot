@@ -1,0 +1,13 @@
+[Unit]
+Description=Refract SMP Discord bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/root/refract-bot
+ExecStart=/root/refract-bot/.venv/bin/python bot.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,38 @@
+@everyone
+
+# Refract SMP is coming back
+
+It's the successor to Prism SMP, and we're rebuilding it properly this time.
+
+## Where things stand
+The server is being built now. It won't be open to the public until **early December**. Until then I'm working on it, and I'll post progress here.
+
+I'm taking the Head Admin role for the first 3 months to steer the creation of the new server. After that, you choose.
+
+## How leadership works
+Prism ran into trouble with too many owners and too little to do. Refract has one owner (me), and a Head Admin who changes every 3 months.
+
+- Near the end of each 3 month term, anyone eligible can put their name forward for Head Admin.
+- Two weeks later, voting opens. You pick a 1st, 2nd and 3rd choice. Votes are anonymous.
+- The winner becomes Head Admin. The previous one goes back to Admin, or to a regular player if they want out.
+- The Head Admin answers to me, but sensible ideas and changes go ahead. Admin actions are posted publicly in #admin-actions with a reason.
+
+The first vote is in **late January**.
+
+To run for Head Admin or vote, you need:
+- 30 days in this server
+- your Minecraft account linked
+
+## Joining the server
+We intend to open Refract to the public with **no application needed** to play. In return, moderation will be strict on new players and on anyone who hasn't linked their Minecraft account to Discord. Link your account early.
+
+## We need staff
+A server this size needs more than me. If you want to help moderate, or you know someone good, join the server and use `/apply`. It's a short form. An admin reviews it and replies. You can apply the day you join.
+
+## Tell us what you want
+We're deciding on plugins and the direction of the server now, while it's still being built. If there's something you want, like a plugin, a game mode or a style of play, say so in #feedback before the server opens.
+
+**Speak now or forever hold your peace.**
+
+Server address: [IP]
+Version: [version]
