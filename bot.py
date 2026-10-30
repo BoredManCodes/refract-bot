@@ -774,26 +774,26 @@ async def run(*args):
 async def update(interaction: discord.Interaction):
     if not await staff_only(interaction, owner=True):
         return
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer()
     _, old = await run("git", "rev-parse", "HEAD")
     code, out = await run("git", "pull", "--ff-only")
     if code != 0:
-        return await interaction.followup.send(f"git pull failed:\n```{out[-1500:]}```", ephemeral=True)
+        return await interaction.followup.send(f"git pull failed:\n```{out[-1500:]}```")
     _, new = await run("git", "rev-parse", "HEAD")
     if new == old:
-        return await interaction.followup.send("Already up to date.", ephemeral=True)
+        return await interaction.followup.send("Already up to date.")
     _, changed = await run("git", "diff", "--name-only", old, new)
     if "requirements.txt" in changed.split():
         code, out = await run(sys.executable, "-m", "pip", "install", "-r", "requirements.txt")
         if code != 0:
             await run("git", "reset", "--hard", old)
-            return await interaction.followup.send(f"pip install failed, rolled back:\n```{out[-1500:]}```", ephemeral=True)
+            return await interaction.followup.send(f"pip install failed, rolled back:\n```{out[-1500:]}```")
     code, out = await run(sys.executable, "-m", "py_compile", "bot.py", "db.py", "tally.py")
     if code != 0:
         await run("git", "reset", "--hard", old)
-        return await interaction.followup.send(f"New code does not compile, rolled back:\n```{out[-1500:]}```", ephemeral=True)
+        return await interaction.followup.send(f"New code does not compile, rolled back:\n```{out[-1500:]}```")
     _, summary = await run("git", "log", "--oneline", f"{old}..{new}")
-    await interaction.followup.send(f"Updated to `{new[:7]}`, restarting.\n```{summary[-1500:]}```", ephemeral=True)
+    await interaction.followup.send(f"Updated to `{new[:7]}`, restarting.\n```{summary[-1500:]}```")
     await bot.close()
     os.execv(sys.executable, [sys.executable, *sys.argv])
 
