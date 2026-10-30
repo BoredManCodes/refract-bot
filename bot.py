@@ -661,14 +661,6 @@ async def on_interaction(interaction):
 
 # ---------- website API (the Worker calls in; loopback only, exposed by a tunnel) ----------
 
-async def build_status(guild):
-    head_m = head_admin(guild)
-    head = None
-    if head_m:
-        term = db.current_term()
-        head = {"name": head_m.display_name,
-                "avatar": head_m.display_avatar.replace(size=128, format="png").url,
-                "term": db.term_count(head_m.id) or None,
 _media_src = {}    # message id -> (discord url, kind); filled as the chat preview is built
 _media_bytes = {}  # message id -> (body, content type); small in-memory copy so Discord is hit once
 MEDIA_MAX = 8 * 1024 * 1024
@@ -720,6 +712,14 @@ async def api_media(request):
     return web.Response(body=body, content_type=ctype, headers={"Cache-Control": "public, max-age=86400"})
 
 
+async def build_status(guild):
+    head_m = head_admin(guild)
+    head = None
+    if head_m:
+        term = db.current_term()
+        head = {"name": head_m.display_name,
+                "avatar": head_m.display_avatar.replace(size=128, format="png").url,
+                "term": db.term_count(head_m.id) or None,
                 "since": term["started_at"] if term and term["user_id"] == head_m.id else None}
     election = None
     el = db.active_election()
@@ -747,13 +747,19 @@ async def api_media(request):
         ids = {k: db.get_int(k) for k in ("head_role_id", "admin_role_id", "staff_role_id")}
         async for m in gch.history(limit=60):
             text = m.clean_content.strip()
-            if m.author.bot or not text:
+            media = chat_media(m)
+            if media:  # the link was only there to unfurl into the media, so hide it
+                text = re.sub(r"https?://\S+", "", text).strip()
+            if m.author.bot or not (text or media):
                 continue
             tag = next((n for n, k in (("head", "head_role_id"), ("admin", "admin_role_id"), ("staff", "staff_role_id"))
                         if ids[k] and any(r.id == ids[k] for r in getattr(m.author, "roles", []))), "")
             general.append({"who": m.author.display_name, "role": tag,
-                            "avatar": m.author.display_avatar.replace(size=128, format="png").url, "text": text[:240], "when": m.created_at.isoformat()})
-        general = general[:6][::-1]
+                            "avatar": m.author.display_avatar.replace(size=128, format="png").url, "text": text[:240],
+                            "media": media, "when": m.created_at.isoformat()})
+            if len(general) == 30:
+                break
+        general = general[::-1]
     return {"members": guild.member_count, "linked": len(linked.members) if linked else None, "team": len(team),
             "head": head, "election": election, "log": entries[:5], "general": general}
 
