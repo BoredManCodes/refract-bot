@@ -42,6 +42,15 @@ class Render(unittest.TestCase):
         self.assertEqual(gif[:6], b"GIF89a")
         self.assertLess(len(gif), 8 * 1024 * 1024)  # Discord's upload limit without boosts
 
+    def test_leave_gif(self):
+        gif = asyncio.run(welcome.make_gif(png(), "Tester", kind="leave"))
+        self.assertEqual(gif[:6], b"GIF89a")
+        self.assertLess(len(gif), 8 * 1024 * 1024)
+
+    def test_unknown_kind(self):
+        with self.assertRaises(ValueError):
+            asyncio.run(welcome.make_gif(png(), "Tester", kind="nope"))
+
 
 if __name__ == "__main__":
     unittest.main()

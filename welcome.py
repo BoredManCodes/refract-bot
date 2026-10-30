@@ -5,6 +5,7 @@ At runtime only Pillow and ffmpeg are needed. Easing and timings mirror the GSAP
 """
 import asyncio
 import io
+import math
 import subprocess
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 HERE = Path(__file__).parent / "welcome"
 TEMPLATE = HERE / "template.mp4"
+LEAVE_TEMPLATE = HERE / "template_leave.mp4"
 FONT_MEDIUM = HERE / "Outfit-500.ttf"
 FONT_BOLD = HERE / "Outfit-700.ttf"
 
@@ -124,10 +126,81 @@ class Overlay:
         return base
 
 
-def _render(avatar_bytes, name):
-    overlay = Overlay(avatar_bytes, name)
+class LeaveOverlay(Overlay):
+    """Goodbye variant over welcome/template_leave.mp4 (the template played backwards).
+
+    The avatar shakes, sprints off to the left, and leaves a question mark in the empty ring.
+    """
+    SHAKE = (1.0, 1.5)
+    RUN = (1.5, 2.3)
+    QUESTION = 2.9
+
+    def __init__(self, avatar_bytes, name):
+        super().__init__(avatar_bytes, name)
+        self.question_font = ImageFont.truetype(str(FONT_BOLD), round(380 * self.k))
+
+    def avatar_pose(self, t):
+        """Offset (px in source space), rotation (degrees) and alpha of the avatar at time t."""
+        x = y = rot = 0.0
+        if self.SHAKE[0] <= t < self.RUN[0]:
+            s = (t - self.SHAKE[0]) / (self.RUN[0] - self.SHAKE[0])
+            x = math.sin(t * 70) * 14 * s
+            rot = math.sin(t * 55) * 5 * s
+        elif t >= self.RUN[0]:
+            p = progress(t, *(self.RUN[0], self.RUN[1] - self.RUN[0]))
+            x = -(p ** 2) * 1500
+            y = -abs(math.sin(p * 18)) * 70 * min(1.0, p * 3)
+            rot = -p * 540
+        return x, y, rot
+
+    def frame(self, base, t):
+        k = self.k
+        layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
+
+        if t < self.RUN[1]:
+            x, y, rot = self.avatar_pose(t)
+            size = round(AVATAR_SIZE * k)
+            av = self.avatar.resize((size, size), Image.LANCZOS)
+            if rot:
+                av = av.rotate(rot, resample=Image.BICUBIC)
+            layer.alpha_composite(av, (round((AVATAR_CENTRE[0] + x) * k - size / 2),
+                                       round((AVATAR_CENTRE[1] + y) * k - size / 2)))
+
+        q = back_out(2.2)(progress(t, self.QUESTION, 0.4))
+        if q > 0 and t < 4.4:
+            glyph = Image.new("RGBA", base.size, (0, 0, 0, 0))
+            ImageDraw.Draw(glyph).text((AVATAR_CENTRE[0] * k, AVATAR_CENTRE[1] * k), "?",
+                                       font=self.question_font, fill=(*WHITE, 255), anchor="mm")
+            scale = max(0.01, q)
+            cx, cy = AVATAR_CENTRE[0] * k, AVATAR_CENTRE[1] * k
+            glyph = glyph.transform(base.size, Image.AFFINE,
+                                    (1 / scale, 0, cx - cx / scale, 0, 1 / scale, cy - cy / scale), Image.BICUBIC)
+            layer.alpha_composite(glyph)
+
+        for text, font, spacing, start, dur, top_baseline, colour in (
+            ("NOT EVEN A GOODBYE", self.label_font, self.label_spacing, 0.3, 0.5, 779, DIM),
+            (self.name, self.user_font, -0.02 * self.user_px * k, 0.45, 0.6, 797 + 0.91 * self.user_px, WHITE),
+            ("HAS LEFT REFRACT SMP", self.label_font, self.label_spacing, 0.7, 0.5, 957, DIM),
+        ):
+            p = power3_out(progress(t, start, dur))
+            if p > 0:
+                draw_text(layer, text, font, spacing, TEXT_CENTRE_X * k, (top_baseline + 24 * (1 - p)) * k, colour, p)
+
+        base.alpha_composite(layer)
+        return base
+
+
+KINDS = {
+    "welcome": (TEMPLATE, Overlay),
+    "leave": (LEAVE_TEMPLATE, LeaveOverlay),
+}
+
+
+def _render(avatar_bytes, name, kind="welcome"):
+    template, overlay_cls = KINDS[kind]
+    overlay = overlay_cls(avatar_bytes, name)
     decode = subprocess.Popen(
-        ["ffmpeg", "-v", "error", "-i", str(TEMPLATE), "-vf", f"fps={FPS},scale={OUT_W}:{OUT_H}",
+        ["ffmpeg", "-v", "error", "-i", str(template), "-vf", f"fps={FPS},scale={OUT_W}:{OUT_H}",
          "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
         stdout=subprocess.PIPE)
     encode = subprocess.Popen(
@@ -161,8 +234,10 @@ def _render(avatar_bytes, name):
     return out.getvalue()
 
 
-async def make_gif(avatar_bytes, name, fallback_name=""):
+async def make_gif(avatar_bytes, name, fallback_name="", kind="welcome"):
     """GIF bytes for one member. Renders run one at a time so a join burst cannot starve the bot."""
+    if kind not in KINDS:
+        raise ValueError(f"unknown GIF kind {kind!r}")
     name = clean_name(name, fallback_name)
     async with _render_lock:
-        return await asyncio.to_thread(_render, avatar_bytes, name)
+        return await asyncio.to_thread(_render, avatar_bytes, name, kind)

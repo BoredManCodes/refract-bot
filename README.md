@@ -33,5 +33,7 @@ Enable the Server Members intent on the application in the Discord developer por
 ## Welcome GIFs
 On member join the bot posts a prism-themed GIF with the member's avatar and name in `welcome_channel_id` (`WELCOME_CHANNEL_ID`).
 `POST /welcome` on the website API with `{"user_id": "...", "post": false}` returns the GIF; `"post": true` posts it to the channel instead.
+On member leave the bot posts a goodbye GIF (the avatar sprints out of the prism) to the same channel; pass `"kind": "leave"` to `/welcome` to get or post it manually.
+`welcome/template_leave.mp4` is the template reversed: `ffmpeg -i welcome/template.mp4 -vf reverse -an -c:v libx264 -crf 16 -pix_fmt yuv420p welcome/template_leave.mp4`.
 Runtime needs `ffmpeg` on PATH (`apt install ffmpeg`) and Pillow. The template is `welcome/template.mp4`;
 to change the design edit `welcome-video/index.html` and re-render with `npx hyperframes render --variables '{"bare":true}' -o ../welcome/template.mp4`.

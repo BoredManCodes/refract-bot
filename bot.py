@@ -596,18 +596,26 @@ async def invites_top(interaction: discord.Interaction):
 _welcome_tasks = set()
 
 
-async def welcome_gif(member):
+async def welcome_gif(member, kind="welcome"):
     avatar = await member.display_avatar.replace(size=512, format="png").read()
-    return await welcome.make_gif(avatar, member.display_name, member.name)
+    return await welcome.make_gif(avatar, member.display_name, member.name, kind)
 
 
-async def send_welcome(member, channel_key="welcome_channel_id"):
+async def send_welcome(member, channel_key="welcome_channel_id", kind="welcome"):
+    text = {"welcome": f"Welcome to Refract SMP, {member.mention}!",
+            "leave": f"{discord.utils.escape_mentions(discord.utils.escape_markdown(member.display_name))} "
+                     "left without a trace."}[kind]
     try:
-        gif = await welcome_gif(member)
-        await post(member.guild, channel_key, content=f"Welcome to Refract SMP, {member.mention}!",
-                   file=discord.File(io.BytesIO(gif), "welcome.gif"))
+        gif = await welcome_gif(member, kind)
+        await post(member.guild, channel_key, content=text, file=discord.File(io.BytesIO(gif), f"{kind}.gif"))
     except Exception:
-        log.exception("welcome gif failed for %s", member.id)
+        log.exception("%s gif failed for %s", kind, member.id)
+
+
+def spawn_welcome(member, kind):
+    task = asyncio.create_task(send_welcome(member, kind=kind))  # render takes seconds; keep the event handler free
+    _welcome_tasks.add(task)
+    task.add_done_callback(_welcome_tasks.discard)
 
 
 @bot.event
@@ -625,9 +633,7 @@ async def on_member_join(member):
     embed.set_footer(text=f"ID {member.id}")
     await post(member.guild, "modlog_channel_id", embed=embed)
     if not member.bot:
-        task = asyncio.create_task(send_welcome(member))  # render takes seconds; keep the join handler free
-        _welcome_tasks.add(task)
-        task.add_done_callback(_welcome_tasks.discard)
+        spawn_welcome(member, "welcome")
 
 
 @bot.event
@@ -643,6 +649,8 @@ async def on_member_remove(member):
         embed.add_field(name="Roles", value=" ".join(roles)[:1024], inline=False)
     embed.set_footer(text=f"ID {member.id}")
     await post(member.guild, "modlog_channel_id", embed=embed)
+    if not member.bot:
+        spawn_welcome(member, "leave")
 
 
 @bot.event
@@ -843,6 +851,9 @@ async def api_welcome(request):
         body = await request.json()
         user_id = int(body["user_id"])
         post_it = bool(body.get("post", False))
+        kind = body.get("kind", "welcome")
+        if kind not in ("welcome", "leave"):
+            raise ValueError(kind)
     except Exception:
         return web.json_response({"error": "Bad request."}, status=400)
     try:
@@ -850,10 +861,10 @@ async def api_welcome(request):
     except discord.NotFound:
         return web.json_response({"error": "Not a member of this server."}, status=404)
     if post_it:
-        await send_welcome(member)
+        await send_welcome(member, kind=kind)
         return web.json_response({"ok": True})
     try:
-        gif = await welcome_gif(member)
+        gif = await welcome_gif(member, kind)
     except Exception:
         log.exception("welcome gif failed for %s", user_id)
         return web.json_response({"error": "Could not render the GIF."}, status=500)
