@@ -126,6 +126,19 @@ class ApplyModal(discord.ui.Modal, title="Staff application"):
         await interaction.response.send_message("Application sent. Staff will reply here or by DM.", ephemeral=True)
 
 
+def decided_render(message, applicant_id, accept, by):
+    """Banner text and embed for a decided application message."""
+    verdict = "ACCEPTED" if accept else "DENIED"
+    icon = "✅" if accept else "❌"
+    embed = message.embeds[0]
+    title = re.sub(r"^(✅|❌) (ACCEPTED|DENIED) \| ", "", embed.title or "")
+    embed.colour = discord.Colour.green() if accept else discord.Colour.red()
+    embed.title = f"{icon} {verdict} | {title}"[:256]
+    embed.set_footer(text=f"{verdict.capitalize()} by {by.display_name}")
+    banner = f"## {icon} {verdict}\n<@{applicant_id}>'s application was {verdict.lower()} by {by.mention}."
+    return banner, embed
+
+
 class DecisionView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -138,6 +151,8 @@ class DecisionView(discord.ui.View):
             return await interaction.response.send_message("Already decided or not found.", ephemeral=True)
         if app["user_id"] == interaction.user.id:
             return await interaction.response.send_message("You cannot decide your own application.", ephemeral=True)
+        # role/DM/chat calls can outlast the 3s interaction window
+        await interaction.response.defer()
         db.decide_application(app["id"], "accepted" if accept else "denied", interaction.user.id)
         applicant = interaction.guild.get_member(app["user_id"])
         if accept and applicant:
@@ -157,14 +172,8 @@ class DecisionView(discord.ui.View):
             if chat:
                 await chat.send(f"Welcome to the team, {applicant.mention}! Your staff application was accepted.",
                                 allowed_mentions=discord.AllowedMentions(users=True))
-        verdict = "ACCEPTED" if accept else "DENIED"
-        icon = "✅" if accept else "❌"
-        embed = interaction.message.embeds[0]
-        embed.colour = discord.Colour.green() if accept else discord.Colour.red()
-        embed.title = f"{icon} {verdict} | {embed.title}"[:256]
-        embed.set_footer(text=f"{verdict.capitalize()} by {interaction.user.display_name}")
-        banner = f"## {icon} {verdict}\n<@{app['user_id']}>'s application was {verdict.lower()} by {interaction.user.mention}."
-        await interaction.response.edit_message(content=banner, embed=embed, view=None)
+        banner, embed = decided_render(interaction.message, app["user_id"], accept, interaction.user)
+        await interaction.edit_original_response(content=banner, embed=embed, view=None)
 
     @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, custom_id="app:accept")
     async def accept(self, interaction, button):
@@ -173,6 +182,23 @@ class DecisionView(discord.ui.View):
     @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger, custom_id="app:deny")
     async def deny(self, interaction, button):
         await self.decide(interaction, False)
+
+
+@tree.context_menu(name="Fix application message", guild=GUILD)
+async def fix_application_message(interaction, message: discord.Message):
+    """Re-sync an application message with the database: banner, embed, and remove stale buttons."""
+    if not await staff_only(interaction):
+        return
+    app = db.application_by_message(message.id)
+    if app is None or message.author.id != bot.user.id or not message.embeds:
+        return await interaction.response.send_message("Not an application message.", ephemeral=True)
+    if app["status"] == "pending":
+        await message.edit(view=DecisionView())
+        return await interaction.response.send_message("Still pending; buttons restored.", ephemeral=True)
+    by = interaction.guild.get_member(app["decided_by"]) or interaction.user
+    banner, embed = decided_render(message, app["user_id"], app["status"] == "accepted", by)
+    await message.edit(content=banner, embed=embed, view=None)
+    await interaction.response.send_message(f"Fixed: {app['status']}.", ephemeral=True)
 
 
 @tree.command(name="apply", description="Apply for staff", guild=GUILD)
