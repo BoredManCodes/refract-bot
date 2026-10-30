@@ -12,7 +12,7 @@ Staff applications and quarterly Head Admin elections.
 | /election runoff | owner | 48 hour runoff after a tie. |
 | /election status | anyone | Show candidates. |
 | /withdraw | candidate | Leave the ballot during nominations. |
-| /adminlog | staff | Post an action and reason to #admin-actions. |
+| /adminlog | staff | Post an action and reason to #admin-actions. Owner can set `admin` to log it under another admin's name. |
 | /setup | owner | Create the Head Admin role and the four channels (incl. private #mod-log). |
 
 After an election closes with a winner, the bot schedules the next one (`CYCLE_DAYS` minus 21 days).

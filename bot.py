@@ -502,13 +502,16 @@ async def scheduler():
 # ---------- transparency log ----------
 
 @tree.command(name="adminlog", description="Post an admin action to the public log", guild=GUILD)
-@app_commands.describe(action="What you did", reason="Why")
-async def adminlog(interaction: discord.Interaction, action: str, reason: str):
+@app_commands.describe(action="What was done", reason="Why", admin="Who did it, if not you (owner only)")
+async def adminlog(interaction: discord.Interaction, action: str, reason: str, admin: discord.Member = None):
     staff = db.get_int("staff_role_id")
     if not is_staff(interaction.user) and not any(r.id == staff for r in interaction.user.roles):
         return await interaction.response.send_message("Not allowed.", ephemeral=True)
+    if admin and admin != interaction.user and not is_owner(interaction.user):
+        return await interaction.response.send_message("Only the owner can log for someone else.", ephemeral=True)
+    who = admin or interaction.user
     embed = discord.Embed(title=action[:256], description=reason[:2000], timestamp=now())
-    embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.replace(size=128, format="png").url)
+    embed.set_author(name=who.display_name, icon_url=who.display_avatar.replace(size=128, format="png").url)
     await post(interaction.guild, "log_channel_id", embed=embed)
     await interaction.response.send_message("Logged.", ephemeral=True)
 
