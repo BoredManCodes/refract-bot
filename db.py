@@ -66,6 +66,31 @@ CREATE TABLE IF NOT EXISTS departures (
     kind TEXT NOT NULL,
     reason TEXT
 );
+CREATE TABLE IF NOT EXISTS tickets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id INTEGER,
+    user_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at TEXT NOT NULL,
+    closed_at TEXT,
+    closed_by INTEGER,
+    token TEXT
+);
+CREATE TABLE IF NOT EXISTS ticket_members (
+    ticket_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    PRIMARY KEY (ticket_id, user_id)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS ticket_shares (
+    ticket_id INTEGER PRIMARY KEY,
+    token TEXT NOT NULL UNIQUE
+);
+CREATE TABLE IF NOT EXISTS transcripts (
+    token TEXT PRIMARY KEY,
+    html TEXT NOT NULL
+) WITHOUT ROWID;
 """
 
 
@@ -146,6 +171,75 @@ class DB:
 
     def departures(self):
         return self.c.execute("SELECT * FROM departures ORDER BY left_at IS NULL, left_at DESC").fetchall()
+
+    # tickets
+    def open_ticket_for(self, user_id):
+        return self.c.execute("SELECT * FROM tickets WHERE user_id=? AND status='open' ORDER BY id DESC LIMIT 1",
+                              (user_id,)).fetchone()
+
+    def add_ticket(self, user_id, kind, topic):
+        with self.c:
+            cur = self.c.execute("INSERT INTO tickets (user_id, kind, topic, created_at) VALUES (?,?,?,?)",
+                                 (user_id, kind, topic, iso(now())))
+        return cur.lastrowid
+
+    def set_ticket_channel(self, ticket_id, channel_id):
+        with self.c:
+            self.c.execute("UPDATE tickets SET channel_id=? WHERE id=?", (channel_id, ticket_id))
+
+    def drop_ticket(self, ticket_id):
+        with self.c:
+            self.c.execute("DELETE FROM tickets WHERE id=?", (ticket_id,))
+
+    def ticket_by_channel(self, channel_id):
+        return self.c.execute("SELECT * FROM tickets WHERE channel_id=? AND status='open'", (channel_id,)).fetchone()
+
+    def close_ticket(self, ticket_id, by, token):
+        """False if someone else already closed it."""
+        with self.c:
+            cur = self.c.execute("UPDATE tickets SET status='closed', closed_at=?, closed_by=?, token=? "
+                                 "WHERE id=? AND status='open'", (iso(now()), by, token, ticket_id))
+        return cur.rowcount > 0
+
+    def reopen_ticket(self, ticket_id):
+        with self.c:
+            self.c.execute("UPDATE tickets SET status='open', closed_at=NULL, closed_by=NULL, token=NULL WHERE id=?", (ticket_id,))
+
+    def open_tickets(self):
+        return self.c.execute("SELECT * FROM tickets WHERE status='open'").fetchall()
+
+    def ticket_by_token(self, token):
+        return self.c.execute("SELECT * FROM tickets WHERE token=? AND status='closed'", (token,)).fetchone()
+
+    def add_ticket_members(self, ticket_id, user_ids):
+        with self.c:
+            self.c.executemany("INSERT OR IGNORE INTO ticket_members VALUES (?,?)", [(ticket_id, u) for u in user_ids])
+
+    def is_ticket_member(self, ticket_id, user_id):
+        return self.c.execute("SELECT 1 FROM ticket_members WHERE ticket_id=? AND user_id=?", (ticket_id, user_id)).fetchone() is not None
+
+    def share_token(self, ticket_id):
+        r = self.c.execute("SELECT token FROM ticket_shares WHERE ticket_id=?", (ticket_id,)).fetchone()
+        return r["token"] if r else None
+
+    def set_share(self, ticket_id, token):
+        with self.c:
+            self.c.execute("INSERT OR REPLACE INTO ticket_shares VALUES (?,?)", (ticket_id, token))
+
+    def clear_share(self, ticket_id):
+        with self.c:
+            self.c.execute("DELETE FROM ticket_shares WHERE ticket_id=?", (ticket_id,))
+
+    def ticket_by_share(self, share):
+        return self.c.execute("SELECT t.* FROM tickets t JOIN ticket_shares s ON s.ticket_id=t.id WHERE s.token=?", (share,)).fetchone()
+
+    def save_transcript(self, token, html):
+        with self.c:
+            self.c.execute("INSERT OR REPLACE INTO transcripts VALUES (?,?)", (token, html))
+
+    def transcript(self, token):
+        r = self.c.execute("SELECT html FROM transcripts WHERE token=?", (token,)).fetchone()
+        return r["html"] if r else None
 
     # invites
     def add_invite_join(self, user_id, inviter_id, code):

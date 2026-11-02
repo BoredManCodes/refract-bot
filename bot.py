@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hmac
 import io
 import json
@@ -6,9 +7,11 @@ import logging
 import os
 import random
 import re
+import secrets
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode, urlparse
 
 import discord
 import aiohttp
@@ -17,6 +20,7 @@ from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
 
+import tickets
 import welcome
 from db import DB, iso, now
 from tally import tally
@@ -725,6 +729,313 @@ async def on_interaction(interaction):
     await post(interaction.guild, "modlog_channel_id", embed=embed)
 
 
+# ---------- support tickets ----------
+
+TICKET_KINDS = {"game": ("Game", "Minecraft server: bugs, griefing, lost items, bans", discord.Colour.green()),
+                "discord": ("Discord", "Discord server: roles, channels, reports, other", discord.Colour.blurple())}
+TRANSCRIPT_BASE_URL = os.environ.get("TRANSCRIPT_BASE_URL", "").rstrip("/")  # public URL prefix; the token is appended
+TICKET_MAX_MESSAGES = 5000
+TICKET_IMAGE_EACH = 4 * 1024 * 1024    # bigger images stay as (expiring) Discord links
+TICKET_IMAGE_TOTAL = 12 * 1024 * 1024  # inlined image budget per transcript
+_NORMAL_MESSAGES = {discord.MessageType.default, discord.MessageType.reply,
+                    discord.MessageType.chat_input_command, discord.MessageType.context_menu_command}
+
+
+def is_support(m):
+    staff = db.get_int("staff_role_id")
+    return is_staff(m) or any(r.id == staff for r in m.roles)
+
+
+def support_roles(guild):
+    return [r for r in (role(guild, k) for k in ("admin_role_id", "head_role_id", "staff_role_id")) if r]
+
+
+async def support_category(guild):
+    cat = guild.get_channel(db.get_int("support_category_id") or 0)
+    if not isinstance(cat, discord.CategoryChannel):
+        cat = discord.utils.find(lambda c: c.name.lower() == "support", guild.categories)
+    if cat is None:
+        cat = await guild.create_category("Support", overwrites={guild.default_role: discord.PermissionOverwrite(view_channel=False)})
+    db.put("support_category_id", cat.id)
+    return cat
+
+
+def ticket_embed(ticket, opener):
+    label, _, colour = TICKET_KINDS[ticket["kind"]]
+    embed = discord.Embed(title=f"Ticket #{ticket['id']:04d}", description=ticket["topic"][:4000], colour=colour, timestamp=now())
+    embed.set_author(name=opener.display_name, icon_url=opener.display_avatar.replace(size=128, format="png").url)
+    embed.add_field(name="Opened by", value=opener.mention)
+    embed.add_field(name="Type", value=label)
+    embed.add_field(name="Opened", value=discord.utils.format_dt(now(), "R"))
+    embed.set_footer(text="Staff will reply here. Use the buttons below to add someone or close the ticket.")
+    return embed
+
+
+class TicketModal(discord.ui.Modal, title="Open a ticket"):
+    kind = discord.ui.Label(text="What do you need help with?", component=discord.ui.Select(
+        options=[discord.SelectOption(label=f"{v[0]} related", value=k, description=v[1][:100]) for k, v in TICKET_KINDS.items()]))
+    topic = discord.ui.Label(text="Tell us what is going on", component=discord.ui.TextInput(
+        style=discord.TextStyle.paragraph, max_length=1000, placeholder="Include your Minecraft name and what happened."))
+
+    async def on_submit(self, interaction):
+        kind = self.kind.component.values[0]
+        guild, user = interaction.guild, interaction.user
+        existing = db.open_ticket_for(user.id)
+        if existing:
+            ch = guild.get_channel(existing["channel_id"] or 0)
+            if ch is not None:
+                return await interaction.response.send_message(f"You already have a ticket open: {ch.mention}", ephemeral=True)
+            db.close_ticket(existing["id"], user.id, None)  # its channel was deleted by hand
+        await interaction.response.defer(ephemeral=True)
+        ticket_id = db.add_ticket(user.id, kind, self.topic.component.value.strip())
+        try:
+            cat = await support_category(guild)
+            slug = re.sub(r"[^a-z0-9]+", "-", user.display_name.lower()).strip("-")[:20] or "user"
+            ow = {guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                  guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, embed_links=True, attach_files=True,
+                                                         manage_channels=True, manage_permissions=True, read_message_history=True),
+                  user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True,
+                                                    embed_links=True, read_message_history=True)}
+            for r in support_roles(guild):
+                ow[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True,
+                                                    embed_links=True, read_message_history=True, manage_messages=True)
+            ch = await guild.create_text_channel(f"ticket-{ticket_id:04d}-{slug}", category=cat, overwrites=ow,
+                                                 topic=f"{TICKET_KINDS[kind][0]} ticket for {user} ({user.id})",
+                                                 reason=f"Ticket #{ticket_id} opened by {user}")
+            db.set_ticket_channel(ticket_id, ch.id)
+            ticket = db.ticket_by_channel(ch.id)
+            ping = role(guild, "staff_role_id") or role(guild, "admin_role_id")
+            await ch.send(f"{user.mention} {ping.mention if ping else ''}".strip(), embed=ticket_embed(ticket, user), view=TicketControls(),
+                          allowed_mentions=discord.AllowedMentions(users=True, roles=True))
+        except Exception:
+            log.exception("could not open ticket %s", ticket_id)
+            db.drop_ticket(ticket_id)
+            return await interaction.followup.send("Could not create the ticket. Tell an admin.", ephemeral=True)
+        await interaction.followup.send(f"Ticket opened: {ch.mention}", ephemeral=True)
+
+
+class TicketPanel(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Open a ticket", style=discord.ButtonStyle.primary, custom_id="ticket:open", emoji="\N{ADMISSION TICKETS}")
+    async def open(self, interaction, button):
+        await interaction.response.send_modal(TicketModal())
+
+
+class AddUserSelect(discord.ui.View):
+    def __init__(self, channel):
+        super().__init__(timeout=120)
+        self.channel = channel
+
+    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Pick who to add", min_values=1, max_values=10)
+    async def pick(self, interaction, select):
+        added = []
+        for u in select.values:
+            if u.bot or self.channel.overwrites_for(u).view_channel:
+                continue
+            await self.channel.set_permissions(u, view_channel=True, send_messages=True, attach_files=True, embed_links=True,
+                                               read_message_history=True, reason=f"Added to ticket by {interaction.user}")
+            added.append(u)
+        if not added:
+            return await interaction.response.edit_message(content="Nobody new to add.", view=None)
+        names = ", ".join(u.mention for u in added)
+        await interaction.response.edit_message(content=f"Added {names}.", view=None)
+        await self.channel.send(f"{names} added to the ticket by {interaction.user.mention}.",
+                                allowed_mentions=discord.AllowedMentions(users=True))
+
+
+class ConfirmClose(discord.ui.View):
+    def __init__(self, channel):
+        super().__init__(timeout=60)
+        self.channel = channel
+
+    @discord.ui.button(label="Close ticket", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction, button):
+        await interaction.response.edit_message(content="Closing...", view=None)
+        await close_ticket(self.channel, interaction.user)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction, button):
+        await interaction.response.edit_message(content="Cancelled.", view=None)
+
+
+class TicketControls(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id="ticket:close")
+    async def close(self, interaction, button):
+        ticket = db.ticket_by_channel(interaction.channel.id)
+        if ticket is None:
+            return await interaction.response.send_message("This ticket is already closed.", ephemeral=True)
+        if interaction.user.id != ticket["user_id"] and not is_support(interaction.user):
+            return await interaction.response.send_message("Only the ticket owner or staff can close it.", ephemeral=True)
+        await interaction.response.send_message("Close this ticket and save the transcript?",
+                                                view=ConfirmClose(interaction.channel), ephemeral=True)
+
+    @discord.ui.button(label="Add User", style=discord.ButtonStyle.secondary, custom_id="ticket:add", emoji="\N{BUSTS IN SILHOUETTE}")
+    async def add(self, interaction, button):
+        if db.ticket_by_channel(interaction.channel.id) is None:
+            return await interaction.response.send_message("This ticket is closed.", ephemeral=True)
+        await interaction.response.send_message("Who should be added?", view=AddUserSelect(interaction.channel), ephemeral=True)
+
+
+def colour_hex(member):
+    return f"#{member.colour.value:06x}" if isinstance(member, discord.Member) and member.colour.value else None
+
+
+def snapshot_message(m):
+    a = m.author
+    reply = None
+    ref = m.reference.resolved if m.reference else None
+    if isinstance(ref, discord.Message):
+        reply = {"name": ref.author.display_name, "colour": colour_hex(ref.author), "content": ref.content,
+                 "avatar": ref.author.display_avatar.replace(size=32, static_format="png").url}
+    system = None
+    if m.type not in _NORMAL_MESSAGES:
+        system = m.system_content
+        if not system:
+            return None
+    return {
+        "id": m.id, "created": m.created_at.isoformat(), "edited": m.edited_at is not None, "content": m.content, "system": system,
+        "author": {"id": a.id, "name": a.display_name, "bot": a.bot, "colour": colour_hex(a),
+                   "avatar": a.display_avatar.replace(size=64, static_format="png").url},
+        "reply": reply,
+        "attachments": [{"name": x.filename, "url": x.url, "size": x.size,
+                         "image": (x.content_type or "").startswith("image/")} for x in m.attachments],
+        "embeds": [{"title": e.title, "url": e.url, "description": e.description,
+                    "color": f"#{e.colour.value:06x}" if e.colour else None,
+                    "author": {"name": e.author.name, "icon": e.author.icon_url} if e.author and e.author.name else None,
+                    "fields": [{"name": f.name, "value": f.value, "inline": f.inline} for f in e.fields],
+                    "image": e.image.url if e.image else None, "thumbnail": e.thumbnail.url if e.thumbnail else None,
+                    "footer": e.footer.text if e.footer else None, "timestamp": e.timestamp.isoformat() if e.timestamp else None}
+                   for e in m.embeds if e.type == "rich"],
+        "components": [[{"label": b.label or "", "style": b.style.value} for b in row.children if isinstance(b, discord.Button)]
+                       for row in m.components if isinstance(row, discord.ActionRow)],
+        "reactions": [{"emoji": str(r.emoji), "count": r.count,
+                       "url": r.emoji.url if isinstance(r.emoji, (discord.Emoji, discord.PartialEmoji)) and r.emoji.id else None}
+                      for r in m.reactions],
+    }
+
+
+async def inline_images(snaps):
+    """Discord attachment links expire, so keep a copy of the pictures inside the page (best effort, size capped)."""
+    budget = TICKET_IMAGE_TOTAL
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as http:
+        for s in snaps:
+            targets = [(a, "url") for a in s["attachments"] if a["image"]]
+            targets += [(e, k) for e in s["embeds"] for k in ("image", "thumbnail") if e.get(k)]
+            for obj, key in targets:
+                limit = min(TICKET_IMAGE_EACH, budget)
+                if limit <= 0:
+                    return
+                try:
+                    async with http.get(obj[key]) as r:
+                        ctype = r.headers.get("Content-Type", "").split(";")[0]
+                        if r.status != 200 or not ctype.startswith("image/") or (r.content_length or 0) > limit:
+                            continue
+                        data = await r.content.read(limit + 1)
+                except Exception:
+                    continue
+                if len(data) > limit:
+                    continue
+                budget -= len(data)
+                obj[key] = f"data:{ctype};base64,{base64.b64encode(data).decode()}"
+
+
+def mention_context(guild, snaps, messages):
+    blob = "\n".join([s["content"] or "" for s in snaps] + [
+        (e.get("description") or "") + " ".join(f["value"] for f in e["fields"]) for s in snaps for e in s["embeds"]])
+    users = {str(u.id): u.display_name for m in messages for u in m.mentions}
+    for i in re.findall(r"<@!?(\d+)>", blob):
+        mem = guild.get_member(int(i))
+        users.setdefault(i, mem.display_name if mem else "Unknown User")
+    roles = {}
+    for i in re.findall(r"<@&(\d+)>", blob):
+        r = guild.get_role(int(i))
+        roles[i] = (r.name, f"#{r.colour.value:06x}" if r.colour.value else None) if r else ("Unknown Role", None)
+    chans = {}
+    for i in re.findall(r"<#(\d+)>", blob):
+        c = guild.get_channel(int(i))
+        chans[i] = c.name if c else "unknown"
+    return {"users": users, "roles": roles, "channels": chans}
+
+
+async def close_ticket(tchan, closer):
+    guild = tchan.guild
+    ticket = db.ticket_by_channel(tchan.id)
+    if ticket is None:
+        return
+    token = secrets.token_urlsafe(24)
+    if not db.close_ticket(ticket["id"], closer.id, token):
+        return
+    label, _, colour = TICKET_KINDS[ticket["kind"]]
+    try:
+        await tchan.send(f"Ticket closed by {closer.mention}. Saving the transcript; this channel is deleted in a few seconds.",
+                           allowed_mentions=discord.AllowedMentions.none())
+        messages = [m async for m in tchan.history(limit=TICKET_MAX_MESSAGES, oldest_first=True)]
+        snaps = [s for s in map(snapshot_message, messages) if s]
+        await inline_images(snaps)
+        opener = guild.get_member(ticket["user_id"])
+        meta = {"title": f"Ticket #{ticket['id']:04d} ({label})", "channel": tchan.name,
+                "footer": f"{guild.name} ticket transcript. Times are shown in your local timezone.",
+                "info": [("Opened by", opener.display_name if opener else f"Unknown ({ticket['user_id']})"), ("Type", label),
+                         ("Opened", ticket["created_at"][:16].replace("T", " ") + " UTC"), ("Closed by", closer.display_name),
+                         ("Closed", now().strftime("%Y-%m-%d %H:%M") + " UTC"), ("Messages", str(len(snaps))),
+                         ("Request", ticket["topic"][:200])]}
+        members = {ticket["user_id"]} | {m.author.id for m in messages if not m.author.bot}
+        members |= {t.id for t in tchan.overwrites if isinstance(t, discord.Member) and not t.bot}
+        db.add_ticket_members(ticket["id"], members)
+        page = tickets.render_transcript(meta, snaps, mention_context(guild, snaps, messages))
+        db.save_transcript(token, page)
+    except Exception:
+        log.exception("transcript failed for ticket %s", ticket["id"])
+        db.reopen_ticket(ticket["id"])
+        await tchan.send("The transcript failed, so the ticket stays open. Ask an admin to check the bot log.")
+        return
+    url = f"{TRANSCRIPT_BASE_URL}/{token}" if TRANSCRIPT_BASE_URL else None
+    raw = page.encode()
+    fits = len(raw) < guild.filesize_limit - 4096
+
+    def attach():
+        return discord.File(io.BytesIO(raw), filename=f"ticket-{ticket['id']:04d}.html") if fits else discord.utils.MISSING
+
+    embed = discord.Embed(title=f"Ticket #{ticket['id']:04d} closed", colour=colour, timestamp=now(), description=ticket["topic"][:1000])
+    embed.add_field(name="Opened by", value=f"<@{ticket['user_id']}>")
+    embed.add_field(name="Closed by", value=closer.mention)
+    embed.add_field(name="Type", value=label)
+    embed.add_field(name="Messages", value=str(len(snaps)))
+    if url:
+        embed.add_field(name="Transcript", value=url, inline=False)
+    log_ch = channel(guild, "tickets_log_channel_id")
+    if log_ch:
+        await log_ch.send(embed=embed, file=attach())
+    if opener:
+        try:
+            dm = discord.Embed(title=f"Your ticket #{ticket['id']:04d} was closed", colour=colour,
+                               description="A copy of the conversation is attached" + (f" and online at {url}." if url else "."))
+            await opener.send(embed=dm, file=attach())
+        except discord.HTTPException:
+            pass
+    await asyncio.sleep(5)
+    await tchan.delete(reason=f"Ticket #{ticket['id']} closed by {closer}")
+
+
+ticket_group = app_commands.Group(name="ticket", description="Support tickets")
+
+
+@ticket_group.command(name="panel", description="Post the Open a ticket button in this channel (owner)")
+async def ticket_panel(interaction: discord.Interaction):
+    if not await staff_only(interaction, owner=True):
+        return
+    embed = discord.Embed(title="Need help?", colour=discord.Colour.blurple(),
+                          description="Press the button, tell us whether it is about the **Minecraft server** or **Discord**, "
+                                      "and a private channel opens for you and the staff team.")
+    await interaction.channel.send(embed=embed, view=TicketPanel())
+    await interaction.response.send_message("Posted.", ephemeral=True)
+
+
 # ---------- website API (the Worker calls in; loopback only, exposed by a tunnel) ----------
 
 _media_src = {}    # media key -> (discord url, kind); filled as the chat preview is built
@@ -930,6 +1241,8 @@ def build_members(guild):
 
 @web.middleware
 async def api_auth(request, handler):
+    if request.path.startswith("/transcripts/"):  # opened in a browser; the secret is the unguessable token in the path
+        return await handler(request)
     given = request.headers.get("Authorization", "").removeprefix("Bearer ")
     if not API_TOKEN or not hmac.compare_digest(given.encode(), API_TOKEN.encode()):
         return web.json_response({"error": "unauthorised"}, status=401)
@@ -1006,10 +1319,157 @@ async def api_welcome(request):
     return web.Response(body=gif, content_type="image/gif")
 
 
+# Transcript pages: Discord login (OAuth2 identify), then ticket members and staff only.
+# A member can mint a share link that anyone may open without logging in, and revoke it again.
+SESSION_SECRET = (os.environ.get("SESSION_SECRET") or API_TOKEN).encode()
+CLIENT_SECRET = os.environ.get("DISCORD_CLIENT_SECRET", "")
+TOKEN_RE = r"[A-Za-z0-9_-]{20,64}"
+_PAGE_CSP = ("default-src 'none'; img-src https: data:; style-src 'unsafe-inline' https://fonts.googleapis.com; "
+             "font-src https://fonts.gstatic.com; script-src 'unsafe-inline'")
+
+
+def tx_html(body, status=200, connect=False):
+    csp = _PAGE_CSP + ("; connect-src 'self'" if connect else "")
+    return web.Response(text=body, status=status, content_type="text/html", headers={
+        "X-Robots-Tag": "noindex, nofollow", "Referrer-Policy": "no-referrer", "Cache-Control": "private, no-store",
+        "Content-Security-Policy": csp})
+
+
+def tx_enabled():
+    return bool(TRANSCRIPT_BASE_URL and CLIENT_SECRET and SESSION_SECRET and bot.application_id)
+
+
+def tx_cookie_path():
+    return urlparse(TRANSCRIPT_BASE_URL).path or "/"
+
+
+def tx_session(request):
+    return tickets.read_session(SESSION_SECRET, request.cookies.get("tx_session"))
+
+
+def tx_allowed(ticket, user_id):
+    if db.is_ticket_member(ticket["id"], user_id):
+        return True
+    guild = bot.get_guild(GUILD_ID)
+    member = guild.get_member(user_id) if guild else None
+    return member is not None and is_support(member)
+
+
+def tx_login_page(next_token):
+    return tx_html(tickets.message_page("Sign in to view this transcript", (
+        '<p>Only people who were in the ticket, and staff, can open it.</p>'
+        f'<a class="go" href="{TRANSCRIPT_BASE_URL}/login?next={next_token}">Log in with Discord</a>')), status=401)
+
+
+async def tx_authorised(request):
+    """(ticket, user_id) for a logged-in member, or a response to return instead."""
+    token = request.match_info["token"]
+    ticket = db.ticket_by_token(token) if re.fullmatch(TOKEN_RE, token) else None
+    if ticket is None:
+        return tx_html(tickets.message_page("Transcript not found", "<p>The link is wrong or the transcript was removed.</p>"), 404)
+    uid = tx_session(request)
+    if uid is None:
+        return tx_login_page(token)
+    if not tx_allowed(ticket, uid):
+        return tx_html(tickets.message_page("No access", "<p>This transcript is only open to people who were in the ticket.</p>"), 403)
+    return ticket, uid
+
+
+async def api_transcript(request):
+    if not tx_enabled():
+        return tx_html(tickets.message_page("Transcripts unavailable", "<p>Login is not configured.</p>"), 503)
+    got = await tx_authorised(request)
+    if isinstance(got, web.Response):
+        return got
+    ticket, _ = got
+    share = db.share_token(ticket["id"])
+    page = tickets.with_share_bar(db.transcript(ticket["token"]), f"{TRANSCRIPT_BASE_URL}/s/{share}" if share else None)
+    return tx_html(page, connect=True)
+
+
+async def api_transcript_shared(request):
+    share = request.match_info["share"]
+    ticket = db.ticket_by_share(share) if re.fullmatch(TOKEN_RE, share) else None
+    page = db.transcript(ticket["token"]) if ticket else None
+    if page is None:
+        return tx_html(tickets.message_page("Link not available", "<p>Sharing for this transcript was turned off.</p>"), 404)
+    return tx_html(page)
+
+
+async def api_transcript_share(request, on):
+    if request.headers.get("X-Requested-With") != "transcript":
+        return web.json_response({"error": "bad request"}, status=400)
+    got = await tx_authorised(request)
+    if isinstance(got, web.Response):
+        return web.json_response({"error": "not allowed"}, status=got.status)
+    ticket, _ = got
+    if on:
+        share = db.share_token(ticket["id"])
+        if share is None:
+            share = secrets.token_urlsafe(24)
+            db.set_share(ticket["id"], share)
+        return web.json_response({"url": f"{TRANSCRIPT_BASE_URL}/s/{share}"})
+    db.clear_share(ticket["id"])
+    return web.json_response({"url": None})
+
+
+async def api_share_on(request):
+    return await api_transcript_share(request, True)
+
+
+async def api_share_off(request):
+    return await api_transcript_share(request, False)
+
+
+async def api_transcript_login(request):
+    nxt = request.query.get("next", "")
+    if not tx_enabled() or not re.fullmatch(TOKEN_RE, nxt):
+        return web.Response(status=400, text="Bad request")
+    nonce = secrets.token_urlsafe(16)
+    state = tickets.sign(SESSION_SECRET, f"{nonce}:{nxt}")
+    url = "https://discord.com/oauth2/authorize?" + urlencode({
+        "client_id": bot.application_id, "response_type": "code", "scope": "identify", "state": state, "prompt": "none",
+        "redirect_uri": f"{TRANSCRIPT_BASE_URL}/callback"})
+    resp = web.HTTPFound(url)
+    resp.set_cookie("tx_state", nonce, max_age=600, httponly=True, secure=TRANSCRIPT_BASE_URL.startswith("https"),
+                    samesite="Lax", path=tx_cookie_path())
+    raise resp
+
+
+async def api_transcript_callback(request):
+    if not tx_enabled():
+        return web.Response(status=503, text="Login is not configured")
+    value = tickets.unsign(SESSION_SECRET, request.query.get("state"))
+    nonce, _, nxt = (value or "").partition(":")
+    code = request.query.get("code")
+    if not value or not code or nonce != request.cookies.get("tx_state") or not re.fullmatch(TOKEN_RE, nxt):
+        return tx_html(tickets.message_page("Login failed", "<p>Open the transcript link again and retry.</p>"), 400)
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as http:
+            async with http.post("https://discord.com/api/v10/oauth2/token", data={
+                    "client_id": bot.application_id, "client_secret": CLIENT_SECRET, "grant_type": "authorization_code",
+                    "code": code, "redirect_uri": f"{TRANSCRIPT_BASE_URL}/callback"}) as r:
+                access = (await r.json())["access_token"]
+            async with http.get("https://discord.com/api/v10/users/@me", headers={"Authorization": f"Bearer {access}"}) as r:
+                uid = int((await r.json())["id"])
+    except Exception:
+        log.exception("transcript login failed")
+        return tx_html(tickets.message_page("Login failed", "<p>Discord did not accept the login. Try again.</p>"), 502)
+    resp = web.HTTPFound(f"{TRANSCRIPT_BASE_URL}/{nxt}")
+    resp.set_cookie("tx_session", tickets.make_session(SESSION_SECRET, uid), max_age=7 * 86400, httponly=True,
+                    secure=TRANSCRIPT_BASE_URL.startswith("https"), samesite="Lax", path=tx_cookie_path())
+    resp.del_cookie("tx_state", path=tx_cookie_path())
+    raise resp
+
+
 async def start_api():
     app = web.Application(middlewares=[api_auth], client_max_size=16 * 1024)
     app.add_routes([web.get("/status", api_status), web.get("/members", api_members), web.post("/applications", api_application),
-                    web.post("/welcome", api_welcome), web.get("/media/{id}", api_media)])
+                    web.post("/welcome", api_welcome), web.get("/media/{id}", api_media),
+                    web.get("/transcripts/login", api_transcript_login), web.get("/transcripts/callback", api_transcript_callback),
+                    web.get("/transcripts/s/{share}", api_transcript_shared),
+                    web.post("/transcripts/{token}/share", api_share_on), web.post("/transcripts/{token}/unshare", api_share_off),
+                    web.get("/transcripts/{token}", api_transcript)])
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", API_PORT).start()
@@ -1042,7 +1502,7 @@ async def update(interaction: discord.Interaction):
         if code != 0:
             await run("git", "reset", "--hard", old)
             return await interaction.followup.send(f"pip install failed, rolled back:\n```{out[-1500:]}```")
-    code, out = await run(sys.executable, "-m", "py_compile", "bot.py", "db.py", "tally.py", "welcome.py")
+    code, out = await run(sys.executable, "-m", "py_compile", "bot.py", "db.py", "tally.py", "tickets.py", "welcome.py")
     if code != 0:
         await run("git", "reset", "--hard", old)
         return await interaction.followup.send(f"New code does not compile, rolled back:\n```{out[-1500:]}```")
@@ -1080,10 +1540,13 @@ async def setup(interaction: discord.Interaction):
         if m:
             modlog_ow[m] = discord.PermissionOverwrite(view_channel=True, read_message_history=True)
     made = []
+    if not isinstance(g.get_channel(db.get_int("support_category_id") or 0), discord.CategoryChannel):
+        await support_category(g)
     for key, name, ow in (("applications_channel_id", "staff-applications", staff_ow),
                           ("elections_channel_id", "elections", public_ro),
                           ("log_channel_id", "admin-actions", public_ro),
-                          ("modlog_channel_id", "mod-log", modlog_ow)):
+                          ("modlog_channel_id", "mod-log", modlog_ow),
+                          ("tickets_log_channel_id", "ticket-logs", staff_ow)):
         if channel(g, key) is None:
             ch = await g.create_text_channel(name, overwrites=ow)
             db.put(key, ch.id)
@@ -1096,8 +1559,11 @@ async def setup_hook():
     bot.add_view(DecisionView())
     bot.add_view(NominationView())
     bot.add_view(VoteLauncher())
+    bot.add_view(TicketPanel())
+    bot.add_view(TicketControls())
     tree.add_command(election, guild=GUILD)
     tree.add_command(invites_group, guild=GUILD)
+    tree.add_command(ticket_group, guild=GUILD)
     await tree.sync(guild=GUILD)
     scheduler.start()
     if API_TOKEN:
