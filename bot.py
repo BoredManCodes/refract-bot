@@ -20,6 +20,7 @@ from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
 
+import dashboard
 import tickets
 import welcome
 from db import DB, iso, now
@@ -149,6 +150,42 @@ def decided_render(message, applicant_id, accept, by):
     return banner, embed
 
 
+async def apply_decision(guild, app, accept, by):
+    """Record the verdict, give the staff role, DM the applicant and welcome them in staff chat."""
+    db.decide_application(app["id"], "accepted" if accept else "denied", by.id)
+    applicant = guild.get_member(app["user_id"])
+    if accept and applicant:
+        staff = role(guild, "staff_role_id")
+        if staff:
+            await applicant.add_roles(staff, reason=f"Application #{app['id']} accepted")
+    if applicant:
+        try:
+            await applicant.send(
+                "Your Refract SMP staff application was **accepted**. Welcome to the team! Head to #staff-chat to say hi."
+                if accept else "Your Refract SMP staff application was **denied**. You can apply again later with /apply.")
+        except discord.Forbidden:
+            pass
+    if accept and applicant:
+        chat = channel(guild, "staff_chat_channel_id") or discord.utils.find(
+            lambda c: c.name.endswith("staff-chat"), guild.text_channels)
+        if chat:
+            await chat.send(f"Welcome to the team, {applicant.mention}! Your staff application was accepted.",
+                            allowed_mentions=discord.AllowedMentions(users=True))
+
+
+async def decide_from_dashboard(guild, app, accept, by):
+    """Same as pressing Accept/Deny, then fix up the application message in Discord."""
+    await apply_decision(guild, app, accept, by)
+    ch = channel(guild, "applications_channel_id")
+    try:
+        msg = await ch.fetch_message(app["message_id"]) if ch and app["message_id"] else None
+        if msg and msg.embeds:
+            banner, embed = decided_render(msg, app["user_id"], accept, by)
+            await msg.edit(content=banner, embed=embed, view=None)
+    except discord.HTTPException:
+        log.exception("could not update application message %s", app["id"])
+
+
 class DecisionView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -163,25 +200,7 @@ class DecisionView(discord.ui.View):
             return await interaction.response.send_message("You cannot decide your own application.", ephemeral=True)
         # role/DM/chat calls can outlast the 3s interaction window
         await interaction.response.defer()
-        db.decide_application(app["id"], "accepted" if accept else "denied", interaction.user.id)
-        applicant = interaction.guild.get_member(app["user_id"])
-        if accept and applicant:
-            staff = role(interaction.guild, "staff_role_id")
-            if staff:
-                await applicant.add_roles(staff, reason=f"Application #{app['id']} accepted")
-        if applicant:
-            try:
-                await applicant.send(
-                    "Your Refract SMP staff application was **accepted**. Welcome to the team! Head to #staff-chat to say hi."
-                    if accept else "Your Refract SMP staff application was **denied**. You can apply again later with /apply.")
-            except discord.Forbidden:
-                pass
-        if accept and applicant:
-            chat = channel(interaction.guild, "staff_chat_channel_id") or discord.utils.find(
-                lambda c: c.name.endswith("staff-chat"), interaction.guild.text_channels)
-            if chat:
-                await chat.send(f"Welcome to the team, {applicant.mention}! Your staff application was accepted.",
-                                allowed_mentions=discord.AllowedMentions(users=True))
+        await apply_decision(interaction.guild, app, accept, interaction.user)
         banner, embed = decided_render(interaction.message, app["user_id"], accept, interaction.user)
         await interaction.edit_original_response(content=banner, embed=embed, view=None)
 
@@ -364,28 +383,39 @@ async def el_sethead(interaction: discord.Interaction, member: discord.Member, o
         except ValueError:
             return await interaction.response.send_message("Use YYYY-MM-DD.", ephemeral=True)
     await interaction.response.defer(ephemeral=True)
-    outgoing = head_admin(interaction.guild)
-    term, started = await swap_head(interaction.guild, outgoing, member, True, since)
-    announced = await announce_head(interaction.guild, member, outgoing, term, started)
+    term, announced = await set_head(interaction.guild, member, since)
     await interaction.followup.send(
         f"{member.display_name} is Head Admin (term {term})."
         + ("" if announced else " No announcements channel found, nothing posted."), ephemeral=True)
+
+
+async def set_head(guild, member, since=None):
+    """Appoint by hand: swap roles, log the term, announce. Returns (term number, whether it was announced)."""
+    outgoing = head_admin(guild)
+    term, started = await swap_head(guild, outgoing, member, True, since)
+    return term, await announce_head(guild, member, outgoing, term, started)
 
 
 @election.command(name="runoff", description="Open a 48 hour runoff between the tied candidates (owner)")
 async def el_runoff(interaction: discord.Interaction):
     if not await staff_only(interaction, owner=True):
         return
+    if not await start_runoff(interaction.guild):
+        return await interaction.response.send_message("No tied election.", ephemeral=True)
+    await interaction.response.send_message("Runoff open.", ephemeral=True)
+
+
+async def start_runoff(guild):
     el = db.active_election()
     if el is None or el["status"] != "tied":
-        return await interaction.response.send_message("No tied election.", ephemeral=True)
+        return False
     tied = json.loads(el["restrict_to"])
     new = db.add_election("voting", now(), now() + timedelta(hours=48), el["outgoing_id"],
                           el["outgoing_stays_admin"], tied, el["id"])
     db.copy_candidates(el["id"], new, set(tied))
     db.set_election(el["id"], status="closed")
-    await announce_voting(interaction.guild, new)
-    await interaction.response.send_message("Runoff open.", ephemeral=True)
+    await announce_voting(guild, new)
+    return True
 
 
 @election.command(name="status", description="Show the current election")
@@ -513,11 +543,14 @@ async def adminlog(interaction: discord.Interaction, action: str, reason: str, a
         return await interaction.response.send_message("Not allowed.", ephemeral=True)
     if admin and admin != interaction.user and not is_owner(interaction.user):
         return await interaction.response.send_message("Only the owner can log for someone else.", ephemeral=True)
-    who = admin or interaction.user
+    await post_adminlog(interaction.guild, admin or interaction.user, action, reason)
+    await interaction.response.send_message("Logged.", ephemeral=True)
+
+
+async def post_adminlog(guild, who, action, reason):
     embed = discord.Embed(title=action[:256], description=reason[:2000], timestamp=now())
     embed.set_author(name=who.display_name, icon_url=who.display_avatar.replace(size=128, format="png").url)
-    await post(interaction.guild, "log_channel_id", embed=embed)
-    await interaction.response.send_message("Logged.", ephemeral=True)
+    return await post(guild, "log_channel_id", embed=embed)
 
 
 # ---------- mod log (owner-only) ----------
@@ -771,6 +804,76 @@ def ticket_embed(ticket, opener):
     return embed
 
 
+class TicketExists(Exception):
+    def __init__(self, channel):
+        super().__init__("ticket already open")
+        self.channel = channel
+
+
+async def create_ticket(guild, user, kind, topic, opened_by=None):
+    """Open a ticket channel for user. Raises TicketExists if they already have one."""
+    existing = db.open_ticket_for(user.id)
+    if existing:
+        ch = guild.get_channel(existing["channel_id"] or 0)
+        if ch is not None:
+            raise TicketExists(ch)
+        db.close_ticket(existing["id"], user.id, None)  # its channel was deleted by hand
+    ticket_id = db.add_ticket(user.id, kind, topic)
+    try:
+        cat = await support_category(guild)
+        slug = re.sub(r"[^a-z0-9]+", "-", user.display_name.lower()).strip("-")[:20] or "user"
+        ow = {guild.default_role: discord.PermissionOverwrite(view_channel=False),
+              guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, embed_links=True, attach_files=True,
+                                                     manage_channels=True, manage_permissions=True, read_message_history=True),
+              user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True,
+                                                embed_links=True, read_message_history=True)}
+        for r in support_roles(guild):
+            ow[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True,
+                                                embed_links=True, read_message_history=True, manage_messages=True)
+        by = f" (opened by {opened_by})" if opened_by else ""
+        ch = await guild.create_text_channel(f"ticket-{ticket_id:04d}-{slug}", category=cat, overwrites=ow,
+                                             topic=f"{TICKET_KINDS[kind][0]} ticket for {user} ({user.id}){by}",
+                                             reason=f"Ticket #{ticket_id} opened by {opened_by or user}")
+        db.set_ticket_channel(ticket_id, ch.id)
+        ticket = db.ticket_by_channel(ch.id)
+        ping = role(guild, "staff_role_id") or role(guild, "admin_role_id")
+        lead = f"{user.mention} {ping.mention if ping else ''}".strip()
+        if opened_by:
+            lead += f"\nThis ticket was opened for you by {opened_by.mention}."
+        await ch.send(lead, embed=ticket_embed(ticket, user), view=TicketControls(),
+                      allowed_mentions=discord.AllowedMentions(users=True, roles=True))
+    except Exception:
+        log.exception("could not open ticket %s", ticket_id)
+        db.drop_ticket(ticket_id)
+        raise
+    return ch
+
+
+async def add_ticket_users(channel, users, by):
+    """Give users access to a ticket channel. Returns those who were new."""
+    added = []
+    for u in users:
+        if u.bot or channel.overwrites_for(u).view_channel:
+            continue
+        await channel.set_permissions(u, view_channel=True, send_messages=True, attach_files=True, embed_links=True,
+                                      read_message_history=True, reason=f"Added to ticket by {by}")
+        added.append(u)
+    if added:
+        names = ", ".join(u.mention for u in added)
+        await channel.send(f"{names} added to the ticket by {by.mention}.", allowed_mentions=discord.AllowedMentions(users=True))
+    return added
+
+
+async def remove_ticket_user(channel, user, by):
+    """Take a user's access to a ticket back. The opener cannot be removed."""
+    ticket = db.ticket_by_channel(channel.id)
+    if ticket is None or user.id == ticket["user_id"] or channel.overwrites_for(user).is_empty():
+        return False
+    await channel.set_permissions(user, overwrite=None, reason=f"Removed from ticket by {by}")
+    await channel.send(f"{user.mention} was removed from the ticket by {by.mention}.", allowed_mentions=discord.AllowedMentions.none())
+    return True
+
+
 class TicketModal(discord.ui.Modal, title="Open a ticket"):
     kind = discord.ui.Label(text="What do you need help with?", component=discord.ui.Select(
         options=[discord.SelectOption(label=f"{v[0]} related", value=k, description=v[1][:100]) for k, v in TICKET_KINDS.items()]))
@@ -778,38 +881,12 @@ class TicketModal(discord.ui.Modal, title="Open a ticket"):
         style=discord.TextStyle.paragraph, max_length=1000, placeholder="Include your Minecraft name and what happened."))
 
     async def on_submit(self, interaction):
-        kind = self.kind.component.values[0]
-        guild, user = interaction.guild, interaction.user
-        existing = db.open_ticket_for(user.id)
-        if existing:
-            ch = guild.get_channel(existing["channel_id"] or 0)
-            if ch is not None:
-                return await interaction.response.send_message(f"You already have a ticket open: {ch.mention}", ephemeral=True)
-            db.close_ticket(existing["id"], user.id, None)  # its channel was deleted by hand
         await interaction.response.defer(ephemeral=True)
-        ticket_id = db.add_ticket(user.id, kind, self.topic.component.value.strip())
         try:
-            cat = await support_category(guild)
-            slug = re.sub(r"[^a-z0-9]+", "-", user.display_name.lower()).strip("-")[:20] or "user"
-            ow = {guild.default_role: discord.PermissionOverwrite(view_channel=False),
-                  guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, embed_links=True, attach_files=True,
-                                                         manage_channels=True, manage_permissions=True, read_message_history=True),
-                  user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True,
-                                                    embed_links=True, read_message_history=True)}
-            for r in support_roles(guild):
-                ow[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True,
-                                                    embed_links=True, read_message_history=True, manage_messages=True)
-            ch = await guild.create_text_channel(f"ticket-{ticket_id:04d}-{slug}", category=cat, overwrites=ow,
-                                                 topic=f"{TICKET_KINDS[kind][0]} ticket for {user} ({user.id})",
-                                                 reason=f"Ticket #{ticket_id} opened by {user}")
-            db.set_ticket_channel(ticket_id, ch.id)
-            ticket = db.ticket_by_channel(ch.id)
-            ping = role(guild, "staff_role_id") or role(guild, "admin_role_id")
-            await ch.send(f"{user.mention} {ping.mention if ping else ''}".strip(), embed=ticket_embed(ticket, user), view=TicketControls(),
-                          allowed_mentions=discord.AllowedMentions(users=True, roles=True))
+            ch = await create_ticket(interaction.guild, interaction.user, self.kind.component.values[0], self.topic.component.value.strip())
+        except TicketExists as e:
+            return await interaction.followup.send(f"You already have a ticket open: {e.channel.mention}", ephemeral=True)
         except Exception:
-            log.exception("could not open ticket %s", ticket_id)
-            db.drop_ticket(ticket_id)
             return await interaction.followup.send("Could not create the ticket. Tell an admin.", ephemeral=True)
         await interaction.followup.send(f"Ticket opened: {ch.mention}", ephemeral=True)
 
@@ -830,19 +907,10 @@ class AddUserSelect(discord.ui.View):
 
     @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Pick who to add", min_values=1, max_values=10)
     async def pick(self, interaction, select):
-        added = []
-        for u in select.values:
-            if u.bot or self.channel.overwrites_for(u).view_channel:
-                continue
-            await self.channel.set_permissions(u, view_channel=True, send_messages=True, attach_files=True, embed_links=True,
-                                               read_message_history=True, reason=f"Added to ticket by {interaction.user}")
-            added.append(u)
+        added = await add_ticket_users(self.channel, select.values, interaction.user)
         if not added:
             return await interaction.response.edit_message(content="Nobody new to add.", view=None)
-        names = ", ".join(u.mention for u in added)
-        await interaction.response.edit_message(content=f"Added {names}.", view=None)
-        await self.channel.send(f"{names} added to the ticket by {interaction.user.mention}.",
-                                allowed_mentions=discord.AllowedMentions(users=True))
+        await interaction.response.edit_message(content=f"Added {', '.join(u.mention for u in added)}.", view=None)
 
 
 class ConfirmClose(discord.ui.View):
@@ -1033,11 +1101,15 @@ ticket_group = app_commands.Group(name="ticket", description="Support tickets")
 async def ticket_panel(interaction: discord.Interaction):
     if not await staff_only(interaction, owner=True):
         return
+    await post_ticket_panel(interaction.channel)
+    await interaction.response.send_message("Posted.", ephemeral=True)
+
+
+async def post_ticket_panel(channel):
     embed = discord.Embed(title="Need help?", colour=discord.Colour.blurple(),
                           description="Press the button, tell us whether it is about the **Minecraft server** or **Discord**, "
                                       "and a private channel opens for you and the staff team.")
-    await interaction.channel.send(embed=embed, view=TicketPanel())
-    await interaction.response.send_message("Posted.", ephemeral=True)
+    await channel.send(embed=embed, view=TicketPanel())
 
 
 # ---------- website API (the Worker calls in; loopback only, exposed by a tunnel) ----------
@@ -1466,6 +1538,26 @@ async def api_transcript_callback(request):
     raise resp
 
 
+DASH_BASE_URL = os.environ.get("DASH_BASE_URL", "").rstrip("/")  # public URL of the dashboard; <base>/auth/callback is the OAuth redirect
+
+
+def dash_enabled():
+    return bool(DASH_BASE_URL and CLIENT_SECRET and SESSION_SECRET)
+
+
+def dash_context():
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        bot=bot, db=db, guild=lambda: bot.get_guild(GUILD_ID), owner_ids=OWNER_IDS, base_url=DASH_BASE_URL,
+        client_secret=CLIENT_SECRET, session_secret=SESSION_SECRET.decode(),
+        host=os.environ.get("DASH_HOST", "127.0.0.1"), port=int(os.environ.get("DASH_PORT", "8792")),
+        transcript_base_url=TRANSCRIPT_BASE_URL, ticket_kinds=TICKET_KINDS, TicketExists=TicketExists,
+        create_ticket=create_ticket, add_ticket_users=add_ticket_users, remove_ticket_user=remove_ticket_user,
+        close_ticket=close_ticket, post_ticket_panel=post_ticket_panel, decide_from_dashboard=decide_from_dashboard,
+        open_nominations=open_nominations, start_runoff=start_runoff, set_head=set_head, head_admin=head_admin,
+        post_adminlog=post_adminlog)
+
+
 async def start_api():
     app = web.Application(middlewares=[api_auth], client_max_size=16 * 1024)
     app.add_routes([web.get("/status", api_status), web.get("/members", api_members), web.post("/applications", api_application),
@@ -1506,7 +1598,7 @@ async def update(interaction: discord.Interaction):
         if code != 0:
             await run("git", "reset", "--hard", old)
             return await interaction.followup.send(f"pip install failed, rolled back:\n```{out[-1500:]}```")
-    code, out = await run(sys.executable, "-m", "py_compile", "bot.py", "db.py", "tally.py", "tickets.py", "welcome.py")
+    code, out = await run(sys.executable, "-m", "py_compile", "bot.py", "db.py", "tally.py", "tickets.py", "welcome.py", "dashboard/__init__.py", "dashboard/core.py", "dashboard/views.py")
     if code != 0:
         await run("git", "reset", "--hard", old)
         return await interaction.followup.send(f"New code does not compile, rolled back:\n```{out[-1500:]}```")
@@ -1572,6 +1664,10 @@ async def setup_hook():
     scheduler.start()
     if API_TOKEN:
         await start_api()
+    if dash_enabled():
+        bot._dash_task = asyncio.create_task(dashboard.serve(dash_context()))
+    else:
+        log.info("dashboard off: set DASH_BASE_URL, DISCORD_CLIENT_SECRET and SESSION_SECRET (or BOT_API_TOKEN) to turn it on")
 
 
 @bot.event

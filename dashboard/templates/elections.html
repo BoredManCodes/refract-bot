@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Elections{% endblock %}
+{% block body %}
+<h2 class="mb-3">Head Admin elections</h2>
+<div class="row row-cards">
+  <div class="col-lg-6"><div class="card"><div class="card-header"><h3 class="card-title">Current state</h3></div><div class="card-body">
+    <div class="subheader">Head Admin</div><div class="mb-2">{{ head or 'nobody' }}</div>
+    <div class="subheader">Election</div>
+    {% if el %}
+      <div>#{{ el.id }}, <b>{{ el.status }}</b>. Voting opens {{ el.voting_open|dt }}, closes {{ el.voting_close|dt }}.</div>
+      <div class="subheader mt-2">Candidates</div>
+      {% for c in candidates %}<div class="mb-1"><b>{{ c.name }}</b>: {{ c.pitch }}</div>{% else %}<div class="text-secondary">None yet.</div>{% endfor %}
+    {% else %}
+      <div class="text-secondary">None running.</div>
+      {% if next_nominations %}<div>Nominations auto-open {{ next_nominations|dt }}.</div>{% endif %}
+    {% endif %}
+  </div></div>
+  <div class="card mt-3"><div class="card-header"><h3 class="card-title">History</h3></div>
+    <table class="table card-table"><tbody>
+    {% for h in history %}<tr><td>#{{ h.id }}</td><td>{{ h.status }}</td><td>{{ h.opens|dt }} to {{ h.closes|dt }}</td></tr>{% else %}<tr><td class="text-secondary">No elections yet.</td></tr>{% endfor %}
+    </tbody></table></div></div>
+
+  <div class="col-lg-6">
+    <div class="card mb-3"><div class="card-header"><h3 class="card-title">Open nominations now</h3></div>
+      <form method="post" action="/elections/start" class="card-body">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <div class="row mb-3"><div class="col"><label class="form-label">Nomination days</label><input class="form-control" type="number" name="nomination_days" value="14" min="1" max="60"></div>
+          <div class="col"><label class="form-label">Voting days</label><input class="form-control" type="number" name="voting_days" value="7" min="1" max="30"></div></div>
+        <label class="form-check mb-3"><input class="form-check-input" type="checkbox" name="stays_admin" value="1" checked><span class="form-check-label">Outgoing Head Admin stays Admin</span></label>
+        <div><button class="btn btn-primary" {% if el %}disabled{% endif %}>Start election</button></div>
+      </form></div>
+    <div class="card mb-3"><div class="card-header"><h3 class="card-title">Schedule nominations</h3></div>
+      <form method="post" action="/elections/schedule" class="card-body d-flex gap-2">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input class="form-control" type="date" name="date" required><button class="btn">Schedule (UTC)</button></form></div>
+    {% if el and el.status == 'tied' %}
+    <div class="card mb-3"><div class="card-body"><form method="post" action="/elections/runoff" onsubmit="return confirm('Open a 48 hour runoff?')">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-warning">Open 48 hour runoff</button></form></div></div>
+    {% endif %}
+    <div class="card"><div class="card-header"><h3 class="card-title">Appoint the Head Admin by hand</h3></div>
+      <form method="post" action="/elections/sethead" class="card-body" onsubmit="return confirm('Swap the Head Admin role and announce it?')">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <div class="mb-3"><label class="form-label">Member (type a name, then pick from the list, or paste their user ID)</label>
+          <input class="form-control" name="user" list="member-options" autocomplete="off" required
+                 hx-get="/members/options" hx-trigger="input changed delay:300ms" hx-target="#member-options" hx-swap="innerHTML" hx-vals="js:{q: event.target.value}">
+          <datalist id="member-options"></datalist></div>
+        <div class="mb-3"><label class="form-label">Outgoing Head Admin started on (optional)</label><input class="form-control" type="date" name="since"></div>
+        <button class="btn btn-danger">Appoint</button>
+      </form></div>
+  </div>
+</div>
+{% endblock %}

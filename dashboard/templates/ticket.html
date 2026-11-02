@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Ticket #{{ '%04d' % t.id }}{% endblock %}
+{% block body %}
+<div class="d-flex align-items-center gap-2 mb-3">
+  <a class="btn btn-sm" href="/tickets">Back</a>
+  <h2 class="mb-0">Ticket #{{ '%04d' % t.id }}</h2>
+  <span class="badge {{ 'bg-green-lt' if t.status == 'open' else 'bg-secondary-lt' }}">{{ t.status }}</span>
+</div>
+<div class="row row-cards">
+  <div class="col-lg-8">
+    <div class="card mb-3"><div class="card-body">
+      <div class="row"><div class="col-sm-4"><div class="subheader">Opener</div>{{ t.opener }}</div>
+        <div class="col-sm-4"><div class="subheader">Type</div>{{ t.kind }}</div>
+        <div class="col-sm-4"><div class="subheader">Opened</div>{{ t.created|dt }}</div></div>
+      <div class="subheader mt-3">Request</div><div style="white-space:pre-wrap">{{ t.topic }}</div>
+      {% if t.status == 'closed' %}<div class="subheader mt-3">Closed</div>{{ t.closed|dt }}{% if t.closed_by %} by {{ t.closed_by }}{% endif %}{% endif %}
+    </div></div>
+
+    {% if t.status == 'open' %}
+      {% if channel %}
+      <div class="card"><div class="card-header"><h3 class="card-title">Conversation in #{{ channel.name }}</h3></div>
+        <div class="card-body" style="max-height:60vh;overflow-y:auto" id="msgs"
+             hx-get="/tickets/{{ t.id }}/messages" hx-trigger="load, every 5s" hx-swap="innerHTML"></div>
+        {% if can_manage %}
+        <form method="post" action="/tickets/{{ t.id }}/reply" class="card-footer d-flex gap-2">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input class="form-control" name="text" maxlength="1900" placeholder="Reply as the bot, shown with your name" autocomplete="off" required>
+          <button class="btn btn-primary">Send</button>
+        </form>{% endif %}
+      </div>
+      {% else %}
+      <div class="alert alert-warning">This ticket's channel no longer exists.{% if can_manage %} Closing marks it closed without a transcript.{% endif %}</div>
+      {% endif %}
+    {% else %}
+      {% if has_transcript %}
+      <div class="card"><div class="card-header"><h3 class="card-title">Transcript</h3>
+        <div class="card-actions"><a class="btn btn-sm" href="/tickets/{{ t.id }}/transcript" target="_blank" rel="noopener">Open full page</a></div></div>
+        <iframe src="/tickets/{{ t.id }}/transcript" sandbox="allow-scripts allow-popups" style="width:100%;height:70vh;border:0" title="Transcript"></iframe></div>
+      {% else %}<div class="alert alert-secondary">No transcript was saved for this ticket.</div>{% endif %}
+    {% endif %}
+  </div>
+
+  <div class="col-lg-4">
+    {% if t.status == 'open' and channel %}
+    <div class="card mb-3"><div class="card-header"><h3 class="card-title">People in this ticket</h3></div>
+      <ul class="list-group list-group-flush">
+        {% for m in members %}
+        <li class="list-group-item d-flex align-items-center">{{ m.name }}{% if m.opener %} <span class="badge bg-blue-lt ms-2">opener</span>{% endif %}
+          {% if can_manage and not m.opener %}
+          <form method="post" action="/tickets/{{ t.id }}/remove" class="ms-auto"><input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="user_id" value="{{ m.id }}"><button class="btn btn-sm btn-outline-danger">Remove</button></form>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% if can_manage %}
+      <form method="post" action="/tickets/{{ t.id }}/add" class="card-body">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <label class="form-label">Add a member</label>
+        <input class="form-control mb-2" name="user" list="member-options" autocomplete="off" required
+               hx-get="/members/options" hx-trigger="input changed delay:300ms" hx-target="#member-options" hx-swap="innerHTML" hx-vals="js:{q: event.target.value}">
+        <datalist id="member-options"></datalist>
+        <button class="btn">Add</button>
+      </form>{% endif %}
+    </div>
+    {% endif %}
+
+    {% if can_manage and t.status == 'open' %}
+    <div class="card mb-3"><div class="card-body">
+      <form method="post" action="/tickets/{{ t.id }}/close" onsubmit="return confirm('Close this ticket, save the transcript and delete the channel?')">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-danger w-100">Close ticket</button></form>
+    </div></div>
+    {% endif %}
+
+    {% if t.status == 'closed' and can_share %}
+    <div class="card"><div class="card-header"><h3 class="card-title">Public share link</h3></div><div class="card-body">
+      {% if share_url %}<input class="form-control mb-2" readonly value="{{ share_url }}" onclick="this.select()">{% else %}<p class="text-secondary">Not shared.</p>{% endif %}
+      {% if can_manage %}
+      <form method="post" action="/tickets/{{ t.id }}/share"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="on" value="{{ '0' if share_url else '1' }}">
+        <button class="btn {{ 'btn-outline-danger' if share_url else '' }}">{{ 'Stop sharing' if share_url else 'Create share link' }}</button></form>{% endif %}
+    </div></div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

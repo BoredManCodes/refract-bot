@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Permissions{% endblock %}
+{% block body %}
+<h2 class="mb-1">Dashboard permissions</h2>
+<p class="text-secondary">The server owner always has full access. Anyone else gets only what is granted here, to a role or to a single member. A member gets the union of their own grants and their roles' grants. This page and the audit log stay owner-only.</p>
+<div class="row row-cards">
+  <div class="col-lg-7"><div class="card"><div class="card-header"><h3 class="card-title">Current grants</h3></div>
+    <div class="table-responsive"><table class="table card-table table-vcenter">
+      <thead><tr><th>Who</th><th>Permissions</th></tr></thead><tbody>
+      {% for sub in subjects %}
+      <tr><td><span class="badge {{ 'bg-purple-lt' if sub.kind == 'role' else 'bg-azure-lt' }} me-1">{{ sub.kind }}</span>{{ sub.name }}</td>
+        <td>{% for p in sub.perms %}
+          <form method="post" action="/permissions/revoke" class="d-inline"><input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="kind" value="{{ sub.kind }}"><input type="hidden" name="subject_id" value="{{ sub.id }}"><input type="hidden" name="perm" value="{{ p }}">
+            <button class="badge bg-secondary-lt border-0 me-1 mb-1" title="Revoke {{ p }}">{{ p }} &times;</button></form>
+        {% endfor %}</td></tr>
+      {% else %}<tr><td colspan="2" class="text-secondary">Nothing granted. Only the owner can log in.</td></tr>{% endfor %}
+      </tbody></table></div></div></div>
+
+  <div class="col-lg-5"><div class="card"><div class="card-header"><h3 class="card-title">Grant access</h3></div>
+    <form method="post" action="/permissions/grant" class="card-body">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="mb-3"><label class="form-label">To</label>
+        <select class="form-select" name="kind" onchange="document.getElementById('g-role').hidden = this.value !== 'role'; document.getElementById('g-user').hidden = this.value !== 'user'">
+          <option value="role">A role</option><option value="user">A single member</option></select></div>
+      <div class="mb-3" id="g-role"><label class="form-label">Role</label>
+        <select class="form-select" name="role_id">{% for r in roles %}<option value="{{ r.id }}">{{ r.name }}</option>{% endfor %}</select></div>
+      <div class="mb-3" id="g-user" hidden><label class="form-label">Member (type a name, then pick from the list, or paste their user ID)</label>
+        <input class="form-control" name="user" list="member-options" autocomplete="off"
+               hx-get="/members/options" hx-trigger="input changed delay:300ms" hx-target="#member-options" hx-swap="innerHTML" hx-vals="js:{q: event.target.value}">
+        <datalist id="member-options"></datalist></div>
+      <div class="mb-3"><label class="form-label">Permissions</label>
+        {% for key, label in perms.items() %}<label class="form-check"><input class="form-check-input" type="checkbox" name="perm" value="{{ key }}"><span class="form-check-label"><b>{{ key }}</b><br><span class="text-secondary small">{{ label }}</span></span></label>{% endfor %}</div>
+      <button class="btn btn-primary">Grant</button>
+    </form></div></div>
+</div>
+{% endblock %}

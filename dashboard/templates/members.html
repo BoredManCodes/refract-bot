@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Members{% endblock %}
+{% block body %}
+<div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+  <h2 class="mb-0 me-auto">Members ({{ total }})</h2>
+  <form method="get" class="d-flex gap-2"><input class="form-control" name="q" value="{{ q }}" placeholder="Name or user ID"><button class="btn">Search</button></form>
+</div>
+<div class="row row-cards">
+  <div class="col-lg-9"><div class="card"><div class="table-responsive"><table class="table card-table table-vcenter">
+    <thead><tr><th>Name</th><th>Joined</th><th>Roles</th><th>Invited by</th></tr></thead>
+    <tbody>
+    {% for m in rows %}<tr><td>{{ m.name }} <span class="text-secondary small">{{ m.username }}</span></td><td>{{ m.joined|dt }}</td>
+      <td>{% for r in m.roles %}<span class="badge bg-secondary-lt me-1">{{ r }}</span>{% endfor %}</td><td>{{ m.invited_by }}</td></tr>
+    {% else %}<tr><td colspan="4" class="text-secondary">No matches.</td></tr>{% endfor %}
+    </tbody></table></div></div>
+    {% if rows|length == 200 %}<p class="text-secondary mt-2">Showing the first 200. Search to narrow it down.</p>{% endif %}</div>
+  <div class="col-lg-3"><div class="card"><div class="card-header"><h3 class="card-title">Top inviters</h3></div>
+    <ul class="list-group list-group-flush">{% for name, n in top %}<li class="list-group-item d-flex"><span>{{ name }}</span><span class="ms-auto">{{ n }}</span></li>
+      {% else %}<li class="list-group-item text-secondary">No data.</li>{% endfor %}</ul></div></div>
+</div>
+{% endblock %}

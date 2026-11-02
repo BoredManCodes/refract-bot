@@ -1,0 +1,16 @@
+{% for m in msgs %}
+<div class="d-flex gap-2 mb-3">
+  <img src="{{ m.avatar }}" width="36" height="36" class="rounded-circle" alt="">
+  <div class="flex-fill" style="min-width:0">
+    <div><b>{{ m.author }}</b>{% if m.bot %} <span class="badge bg-blue-lt">bot</span>{% endif %} <span class="text-secondary small">{{ m.when|dt }}</span></div>
+    {% if m.text %}<div style="white-space:pre-wrap;overflow-wrap:anywhere">{{ m.text }}</div>{% endif %}
+    {% for f in m.files %}
+      {% if f.image %}<div><a href="{{ f.url }}" target="_blank" rel="noopener noreferrer"><img src="{{ f.url }}" style="max-width:320px;max-height:240px" class="rounded mt-1" alt="{{ f.name }}"></a></div>
+      {% else %}<div><a href="{{ f.url }}" target="_blank" rel="noopener noreferrer">{{ f.name }}</a></div>{% endif %}
+    {% endfor %}
+    {% for e in m.embeds %}<div class="text-secondary small border-start ps-2 mt-1">{{ e }}</div>{% endfor %}
+  </div>
+</div>
+{% else %}
+<p class="text-secondary">No messages.</p>
+{% endfor %}

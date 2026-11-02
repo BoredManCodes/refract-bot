@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block body %}
+<h2 class="mb-1">Settings</h2>
+<p class="text-secondary">Which roles and channels the bot uses. Leave a field empty to unset it. Election timing and the OAuth/API secrets stay in the bot's environment file.</p>
+<form method="post" action="/settings" class="card"><div class="card-body">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="row">
+  {% for key, label, kind, current in fields %}
+    <div class="col-md-6 mb-3"><label class="form-label">{{ label }}</label>
+      <select class="form-select" name="{{ key }}">
+        <option value="">(not set)</option>
+        {% if kind == 'role' %}{% for r in roles %}<option value="{{ r.id }}" {% if r.id == current %}selected{% endif %}>{{ r.name }}</option>{% endfor %}
+        {% elif kind == 'channel' %}{% for c in channels %}<option value="{{ c.id }}" {% if c.id == current %}selected{% endif %}>#{{ c.name }}</option>{% endfor %}
+        {% else %}{% for c in cats %}<option value="{{ c.id }}" {% if c.id == current %}selected{% endif %}>{{ c.name }}</option>{% endfor %}{% endif %}
+      </select>
+      {% if current and kind == 'role' and current not in roles|map(attribute='id')|list %}<div class="form-hint text-danger">Saved role no longer exists.</div>{% endif %}
+    </div>
+  {% endfor %}
+  </div>
+</div><div class="card-footer"><button class="btn btn-primary">Save</button></div></form>
+{% endblock %}

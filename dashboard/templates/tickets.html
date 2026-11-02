@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Tickets{% endblock %}
+{% block body %}
+<div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+  <h2 class="mb-0 me-auto">Tickets</h2>
+  <div class="btn-group">
+    {% for k in ['open', 'closed', 'all'] %}<a class="btn {% if status == k %}btn-primary{% endif %}" href="/tickets?status={{ k }}">{{ k|capitalize }}</a>{% endfor %}
+  </div>
+  <form method="get" class="d-flex gap-2"><input type="hidden" name="status" value="{{ status }}">
+    <input class="form-control" name="q" value="{{ q }}" placeholder="Search name, text or #id"><button class="btn">Search</button></form>
+</div>
+<div class="card mb-4"><div class="table-responsive"><table class="table card-table table-vcenter">
+  <thead><tr><th>#</th><th>Opener</th><th>Type</th><th>Request</th><th>{{ 'Closed' if status == 'closed' else 'Opened' }}</th><th>Status</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr><td><a href="/tickets/{{ r.id }}">#{{ '%04d' % r.id }}</a></td><td>{{ r.opener }}</td><td>{{ r.kind }}</td>
+    <td class="text-truncate" style="max-width:420px">{{ r.topic }}</td><td>{{ (r.closed or r.created)|dt }}</td>
+    <td><span class="badge {{ 'bg-green-lt' if r.status == 'open' else 'bg-secondary-lt' }}">{{ r.status }}</span></td></tr>
+  {% else %}<tr><td colspan="6" class="text-secondary">No tickets.</td></tr>{% endfor %}
+  </tbody></table></div></div>
+
+{% if can_manage %}
+<div class="row row-cards">
+  <div class="col-lg-7"><div class="card"><div class="card-header"><h3 class="card-title">Open a ticket for someone</h3></div>
+    <form method="post" action="/tickets/new" class="card-body">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="mb-3"><label class="form-label">Member (type a name, then pick from the list, or paste their user ID)</label>
+        <input class="form-control" name="user" list="member-options" autocomplete="off" required
+               hx-get="/members/options" hx-trigger="input changed delay:300ms" hx-target="#member-options" hx-swap="innerHTML" hx-vals="js:{q: event.target.value}">
+        <datalist id="member-options"></datalist></div>
+      <div class="mb-3"><label class="form-label">Type</label>
+        <select class="form-select" name="kind">{% for k, v in kinds.items() %}<option value="{{ k }}">{{ v[0] }}</option>{% endfor %}</select></div>
+      <div class="mb-3"><label class="form-label">What is it about?</label><textarea class="form-control" name="topic" rows="3" maxlength="1000" required></textarea></div>
+      <button class="btn btn-primary">Open ticket</button>
+    </form></div></div>
+  <div class="col-lg-5"><div class="card"><div class="card-header"><h3 class="card-title">Post the open-a-ticket panel</h3></div>
+    <form method="post" action="/tickets/panel" class="card-body">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="mb-3"><label class="form-label">Channel</label>
+        <select class="form-select" name="channel_id">{% for c in channels %}<option value="{{ c.id }}">#{{ c.name }}</option>{% endfor %}</select></div>
+      <button class="btn">Post panel</button>
+    </form></div></div>
+</div>
+{% endif %}
+{% endblock %}

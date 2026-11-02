@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Admin log{% endblock %}
+{% block body %}
+<h2 class="mb-3">Post to the public admin log</h2>
+<div class="card" style="max-width:720px"><form method="post" action="/adminlog" class="card-body">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="mb-3"><label class="form-label">Action</label><input class="form-control" name="action" maxlength="256" required></div>
+  <div class="mb-3"><label class="form-label">Reason</label><textarea class="form-control" name="reason" rows="4" maxlength="2000" required></textarea></div>
+  {% if s.access.owner %}
+  <div class="mb-3"><label class="form-label">Log it under another admin (optional, owner only)</label>
+    <input class="form-control" name="admin" list="member-options" autocomplete="off"
+           hx-get="/members/options" hx-trigger="input changed delay:300ms" hx-target="#member-options" hx-swap="innerHTML" hx-vals="js:{q: event.target.value}">
+    <datalist id="member-options"></datalist></div>
+  {% endif %}
+  <button class="btn btn-primary">Post</button>
+</form></div>
+{% endblock %}

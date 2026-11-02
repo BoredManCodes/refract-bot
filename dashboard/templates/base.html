@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Dashboard{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0/dist/css/tabler.min.css">
+  <script>document.documentElement.setAttribute('data-bs-theme', matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');</script>
+  <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.4/dist/htmx.min.js"></script>
+</head>
+<body>
+<div class="page">
+  <header class="navbar navbar-expand-md">
+    <div class="container-xl">
+      <a class="navbar-brand" href="/">Bot dashboard</a>
+      {% if s %}
+      <ul class="navbar-nav flex-row flex-wrap me-auto ms-3">
+        {% for href, label in nav %}
+        <li class="nav-item"><a class="nav-link {% if path == href or (href != '/' and path.startswith(href)) %}active fw-bold{% endif %}" href="{{ href }}">{{ label }}</a></li>
+        {% endfor %}
+      </ul>
+      <form method="post" action="/logout" class="d-flex align-items-center gap-2">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <span class="text-secondary small">{{ s.member.display_name }}</span>
+        <button class="btn btn-sm">Log out</button>
+      </form>
+      {% endif %}
+    </div>
+  </header>
+  <div class="page-wrapper">
+    <div class="container-xl py-4">
+      {% if flash %}
+      <div class="alert alert-{{ 'success' if flash[0] == 'ok' else 'danger' }}" role="alert">{{ flash[1] }}</div>
+      {% endif %}
+      {% block body %}{% endblock %}
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Applications{% endblock %}
+{% block body %}
+<div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+  <h2 class="mb-0 me-auto">Staff applications</h2>
+  <div class="btn-group">
+    {% for k in ['pending', 'accepted', 'denied', 'all'] %}<a class="btn {% if status == k %}btn-primary{% endif %}" href="/applications?status={{ k }}">{{ k|capitalize }}</a>{% endfor %}
+  </div>
+</div>
+{% for a in rows %}
+<div class="card mb-3">
+  <div class="card-header">
+    <h3 class="card-title">#{{ a.id }} {{ a.name }} <span class="text-secondary">(Minecraft: {{ a.mc }})</span></h3>
+    <div class="card-actions"><span class="badge {{ {'pending': 'bg-yellow-lt', 'accepted': 'bg-green-lt', 'denied': 'bg-red-lt'}[a.status] }}">{{ a.status }}</span></div>
+  </div>
+  <div class="card-body">
+    {% for k, v in a.answers.items() %}<div class="subheader">{{ k }}</div><div class="mb-2" style="white-space:pre-wrap">{{ v }}</div>{% endfor %}
+    <div class="text-secondary small">Sent {{ a.created|dt }}{% if a.decided_by %}, decided by {{ a.decided_by }}{% endif %}</div>
+  </div>
+  {% if a.status == 'pending' %}
+  <div class="card-footer d-flex gap-2">
+    {% for verdict, label, cls in [('accept', 'Accept', 'btn-success'), ('deny', 'Deny', 'btn-danger')] %}
+    <form method="post" action="/applications/{{ a.id }}/{{ verdict }}" onsubmit="return confirm('{{ label }} application #{{ a.id }}?')">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn {{ cls }}">{{ label }}</button></form>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% else %}<p class="text-secondary">No applications.</p>{% endfor %}
+{% endblock %}

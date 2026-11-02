@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Audit log{% endblock %}
+{% block body %}
+<h2 class="mb-3">Dashboard audit log</h2>
+<div class="card"><div class="table-responsive"><table class="table card-table table-vcenter">
+  <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Detail</th></tr></thead><tbody>
+  {% for r in rows %}<tr><td class="text-nowrap">{{ r.at|dt }}</td><td>{{ r.who }}</td><td><code>{{ r.action }}</code></td><td>{{ r.detail }}</td></tr>
+  {% else %}<tr><td colspan="4" class="text-secondary">Nothing yet.</td></tr>{% endfor %}
+  </tbody></table></div></div>
+{% endblock %}

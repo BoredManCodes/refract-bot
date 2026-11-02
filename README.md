@@ -47,3 +47,21 @@ Images are copied into the page (up to 4 MB each, 12 MB total) because Discord a
 Transcripts need a Discord login (OAuth2 `identify`). Only people who sent a message in the ticket, were added to it, or opened it can view one, plus staff. Anyone viewing has a "Share link" button that creates a public link (`/s/<token>`) which opens without login; "Stop sharing" revokes it.
 Setup: set `TRANSCRIPT_BASE_URL` to the public prefix that the Worker/tunnel maps to the bot API's `/transcripts` (so `<base>/login`, `<base>/callback`, `<base>/<token>` and `<base>/s/<token>` all reach the bot), set `DISCORD_CLIENT_SECRET`, and add `<TRANSCRIPT_BASE_URL>/callback` under OAuth2 redirects in the developer portal.
 Run `/setup` once after updating so `#ticket-logs` exists, then `/ticket panel`.
+
+## Web dashboard
+Runs inside the bot process (FastAPI, Jinja2, htmx, Tabler; Authlib for the Discord OAuth2 login). Off unless `DASH_BASE_URL`, `DISCORD_CLIENT_SECRET` and `SESSION_SECRET` (or `BOT_API_TOKEN`) are set.
+It listens on `127.0.0.1:DASH_PORT` (default 8792); put a Cloudflare Tunnel or reverse proxy in front of it and set `DASH_BASE_URL` to that public URL. Add `<DASH_BASE_URL>/auth/callback` under OAuth2 redirects in the developer portal. The login only asks for `identify`; membership and roles come from the bot's own view of the server.
+
+Access: the server owner (and anyone in `OWNER_IDS`) can do everything. Everyone else needs a grant from the owner under **Permissions**, given to a role or to one member (a member gets the union of their own grants and their roles' grants):
+
+| Permission | Allows |
+|---|---|
+| tickets.view | Browse tickets, read open conversations and closed transcripts |
+| tickets.manage | Open a ticket for a member, reply, add or remove people, close, post the panel, make or revoke share links (includes view) |
+| applications.review | Read and accept or deny staff applications |
+| elections.manage | Start, schedule and run elections, appoint the Head Admin |
+| members.view | Member list and invite leaderboard |
+| adminlog.post | Post to the public admin log |
+| settings.edit | Choose which roles and channels the bot uses |
+
+Permissions and the audit log are owner-only. Every change made from the dashboard is written to the audit log. Forms carry a CSRF token and sessions last 7 days; access is re-checked against the live server roles on every request, so removing a role takes effect at once.

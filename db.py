@@ -91,6 +91,19 @@ CREATE TABLE IF NOT EXISTS transcripts (
     token TEXT PRIMARY KEY,
     html TEXT NOT NULL
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS dash_grants (
+    kind TEXT NOT NULL,
+    subject_id INTEGER NOT NULL,
+    perm TEXT NOT NULL,
+    PRIMARY KEY (kind, subject_id, perm)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS dash_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    detail TEXT,
+    at TEXT NOT NULL
+);
 """
 
 
@@ -121,6 +134,10 @@ class DB:
         with self.c:
             self.c.execute("INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                            (key, str(value)))
+
+    def clear(self, key):
+        with self.c:
+            self.c.execute("DELETE FROM settings WHERE key=?", (key,))
 
     def default(self, key, value):
         if value not in (None, "") and self.get(key) is None:
@@ -240,6 +257,54 @@ class DB:
     def transcript(self, token):
         r = self.c.execute("SELECT html FROM transcripts WHERE token=?", (token,)).fetchone()
         return r["html"] if r else None
+
+    def ticket(self, ticket_id):
+        return self.c.execute("SELECT * FROM tickets WHERE id=?", (ticket_id,)).fetchone()
+
+    def tickets(self, status=None, limit=200):
+        if status:
+            return self.c.execute("SELECT * FROM tickets WHERE status=? ORDER BY id DESC LIMIT ?", (status, limit)).fetchall()
+        return self.c.execute("SELECT * FROM tickets ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+    # applications (dashboard)
+    def application(self, app_id):
+        return self.c.execute("SELECT * FROM applications WHERE id=?", (app_id,)).fetchone()
+
+    def applications(self, status=None, limit=200):
+        if status:
+            return self.c.execute("SELECT * FROM applications WHERE status=? ORDER BY id DESC LIMIT ?", (status, limit)).fetchall()
+        return self.c.execute("SELECT * FROM applications ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+    def elections(self, limit=10):
+        return self.c.execute("SELECT * FROM elections ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+    # dashboard access
+    def grants(self):
+        return self.c.execute("SELECT kind, subject_id, perm FROM dash_grants ORDER BY kind, subject_id, perm").fetchall()
+
+    def add_grant(self, kind, subject_id, perm):
+        with self.c:
+            self.c.execute("INSERT OR IGNORE INTO dash_grants VALUES (?,?,?)", (kind, subject_id, perm))
+
+    def remove_grant(self, kind, subject_id, perm):
+        with self.c:
+            self.c.execute("DELETE FROM dash_grants WHERE kind=? AND subject_id=? AND perm=?", (kind, subject_id, perm))
+
+    def perms_for(self, user_id, role_ids):
+        """Dashboard permissions granted to this user directly or through any of their roles."""
+        marks = ",".join("?" * len(role_ids)) or "NULL"
+        rows = self.c.execute(
+            f"SELECT DISTINCT perm FROM dash_grants WHERE (kind='user' AND subject_id=?) OR (kind='role' AND subject_id IN ({marks}))",
+            (user_id, *role_ids)).fetchall()
+        return {r["perm"] for r in rows}
+
+    def audit(self, user_id, action, detail=""):
+        with self.c:
+            self.c.execute("INSERT INTO dash_audit (user_id, action, detail, at) VALUES (?,?,?,?)",
+                           (user_id, action, detail, iso(now())))
+
+    def recent_audit(self, limit=100):
+        return self.c.execute("SELECT * FROM dash_audit ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
 
     # invites
     def add_invite_join(self, user_id, inviter_id, code):
