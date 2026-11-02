@@ -13,7 +13,7 @@ from .core import NAV, PERMS, Denied, Sess, flash, need, resolve_member
 
 router = APIRouter()
 
-ROLE_SETTINGS = [("admin_role_id", "Admin role"), ("head_role_id", "Head Admin role"), ("staff_role_id", "Staff role"),
+ROLE_SETTINGS = [("admin_role_id", "Admin role"), ("head_role_id", "Head Admin role"), ("mod_role_id", "Moderator role"), ("staff_role_id", "Staff role"),
                  ("member_role_id", "Member role"), ("linked_role_id", "Linked Minecraft account role (optional)")]
 CHANNEL_SETTINGS = [("announcements_channel_id", "Announcements"), ("welcome_channel_id", "Welcome and goodbye posts"),
                     ("applications_channel_id", "Staff applications"), ("elections_channel_id", "Elections"),

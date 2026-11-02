@@ -61,6 +61,11 @@ def role(guild, key):
     return guild.get_role(rid) if rid else None
 
 
+def mod_role(guild):
+    """Moderator role: the mod_role_id setting, else a role literally named Moderator."""
+    return role(guild, "mod_role_id") or discord.utils.find(lambda r: r.name.lower() == "moderator", guild.roles)
+
+
 def channel(guild, key):
     cid = db.get_int(key)
     return guild.get_channel(cid) if cid else None
@@ -1229,10 +1234,15 @@ async def build_status(guild):
     elif db.get("next_nominations"):
         election = {"label": "Nominations open in", "target": db.get("next_nominations")}
     linked = role(guild, "linked_role_id")
+    mod = mod_role(guild)
     team = {m.id for key in ("head_role_id", "admin_role_id", "staff_role_id") if (r := role(guild, key)) for m in r.members}
+    if mod:
+        team |= {m.id for m in mod.members}
     staff_list, listed = [], set()
     ranks = [("owner", [m for m in guild.members if is_owner(m)])] + [
-        (tag, r.members if (r := role(guild, key)) else []) for tag, key in (("head", "head_role_id"), ("admin", "admin_role_id"), ("staff", "staff_role_id"))]
+        (tag, r.members if (r := role(guild, key)) else []) for tag, key in (("head", "head_role_id"), ("admin", "admin_role_id"))]
+    ranks.append(("mod", mod.members if mod else []))
+    ranks.append(("staff", r.members if (r := role(guild, "staff_role_id")) else []))
     for tag, members in ranks:
         for m in sorted(members, key=lambda x: x.display_name.lower()):
             if m.bot or m.id in listed:
@@ -1310,6 +1320,7 @@ _members_cache = {"at": 0.0, "body": None}
 
 def build_members(guild):
     head, admin, staff = (role(guild, k) for k in ("head_role_id", "admin_role_id", "staff_role_id"))
+    mod = mod_role(guild)
     members = []
     for m in guild.members:
         if m.bot:
@@ -1690,9 +1701,9 @@ async def setup(interaction: discord.Interaction):
                           ("elections_channel_id", "elections", public_ro),
                           ("log_channel_id", "admin-actions", public_ro),
                           ("modlog_channel_id", "mod-log", modlog_ow),
-                          ("tickets_log_channel_id", "ticket-logs", staff_ow),
-                          ("suggestions_channel_id", "suggestions", public_ro),
-                          ("suggestion_log_channel_id", "suggestion-log", staff_ow)):
+                          ("tickets_log_channel_id", "🧾｜ticket-logs", staff_ow),
+                          ("suggestions_channel_id", "✨｜suggestions", public_ro),
+                          ("suggestion_log_channel_id", "📋｜suggestion-log", staff_ow)):
         if channel(g, key) is None:
             ch = await g.create_text_channel(name, overwrites=ow)
             db.put(key, ch.id)
