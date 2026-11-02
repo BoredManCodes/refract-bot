@@ -51,7 +51,7 @@ Setup: set `TRANSCRIPT_BASE_URL` to the public prefix that the Worker/tunnel map
 Run `/setup` once after updating so `#ticket-logs` exists, then `/ticket panel`.
 
 ## Web dashboard
-Runs inside the bot process (FastAPI, Jinja2, htmx, Tabler; Authlib for the Discord OAuth2 login). Off unless `DASH_BASE_URL`, `DISCORD_CLIENT_SECRET` and `SESSION_SECRET` (or `BOT_API_TOKEN`) are set.
+Runs inside the bot process (FastAPI, Jinja2, htmx, Tabler; Authlib for the Discord OAuth2 login). Off unless `DASH_BASE_URL`, `DISCORD_CLIENT_SECRET` and `SESSION_SECRET` are set. Generate the secret with `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`; it signs the login cookies, so it must differ from `BOT_API_TOKEN`, which the website also holds.
 It listens on `127.0.0.1:DASH_PORT` (default 8792); put a Cloudflare Tunnel or reverse proxy in front of it and set `DASH_BASE_URL` to that public URL. Add `<DASH_BASE_URL>/auth/callback` under OAuth2 redirects in the developer portal. The login only asks for `identify`; membership and roles come from the bot's own view of the server.
 
 Access: the server owner (and anyone in `OWNER_IDS`) can do everything. Everyone else needs a grant from the owner under **Permissions**, given to a role or to one member (a member gets the union of their own grants and their roles' grants):

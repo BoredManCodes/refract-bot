@@ -1541,15 +1541,18 @@ async def api_transcript_callback(request):
 DASH_BASE_URL = os.environ.get("DASH_BASE_URL", "").rstrip("/")  # public URL of the dashboard; <base>/auth/callback is the OAuth redirect
 
 
+DASH_SECRET = os.environ.get("SESSION_SECRET", "")  # no fallback to BOT_API_TOKEN: the website holds that one
+
+
 def dash_enabled():
-    return bool(DASH_BASE_URL and CLIENT_SECRET and SESSION_SECRET)
+    return bool(DASH_BASE_URL and CLIENT_SECRET and DASH_SECRET)
 
 
 def dash_context():
     from types import SimpleNamespace
     return SimpleNamespace(
         bot=bot, db=db, guild=lambda: bot.get_guild(GUILD_ID), owner_ids=OWNER_IDS, base_url=DASH_BASE_URL,
-        client_secret=CLIENT_SECRET, session_secret=SESSION_SECRET.decode(),
+        client_secret=CLIENT_SECRET, session_secret=DASH_SECRET,
         host=os.environ.get("DASH_HOST", "127.0.0.1"), port=int(os.environ.get("DASH_PORT", "8792")),
         transcript_base_url=TRANSCRIPT_BASE_URL, ticket_kinds=TICKET_KINDS, TicketExists=TicketExists,
         create_ticket=create_ticket, add_ticket_users=add_ticket_users, remove_ticket_user=remove_ticket_user,
@@ -1703,7 +1706,7 @@ async def setup_hook():
     if dash_enabled():
         bot._dash_task = asyncio.create_task(dashboard.serve(dash_context()))
     else:
-        log.info("dashboard off: set DASH_BASE_URL, DISCORD_CLIENT_SECRET and SESSION_SECRET (or BOT_API_TOKEN) to turn it on")
+        log.info("dashboard off: set DASH_BASE_URL, DISCORD_CLIENT_SECRET and SESSION_SECRET to turn it on")
 
 
 @bot.event
