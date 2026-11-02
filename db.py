@@ -104,6 +104,49 @@ CREATE TABLE IF NOT EXISTS dash_audit (
     detail TEXT,
     at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS infractions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    mod_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    auto INTEGER NOT NULL DEFAULT 0,
+    rule TEXT
+);
+CREATE INDEX IF NOT EXISTS infractions_user ON infractions (user_id);
+CREATE TABLE IF NOT EXISTS sticky_roles (
+    user_id INTEGER NOT NULL,
+    role_id INTEGER NOT NULL,
+    PRIMARY KEY (user_id, role_id)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS locks (
+    channel_id INTEGER NOT NULL,
+    target_id INTEGER NOT NULL,
+    scope TEXT NOT NULL,
+    prev TEXT NOT NULL,
+    PRIMARY KEY (channel_id, target_id)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS suggestions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    channel_id INTEGER,
+    message_id INTEGER,
+    content TEXT NOT NULL,
+    anonymous INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    decided_by INTEGER,
+    reason TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS suggestion_votes (
+    suggestion_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    vote INTEGER NOT NULL,
+    PRIMARY KEY (suggestion_id, user_id)
+) WITHOUT ROWID;
 """
 
 
@@ -407,3 +450,134 @@ class DB:
     def ballots(self, eid):
         rows = self.c.execute("SELECT first, second, third FROM ballots WHERE election_id=?", (eid,)).fetchall()
         return [(r["first"], r["second"], r["third"]) for r in rows]
+
+    # infractions
+    def add_infraction(self, user_id, mod_id, kind, reason, expires=None, auto=False, rule=None):
+        with self.c:
+            cur = self.c.execute("INSERT INTO infractions (user_id, mod_id, kind, reason, created_at, expires_at, active, auto, rule) "
+                                 "VALUES (?,?,?,?,?,?,?,?,?)",
+                                 (user_id, mod_id, kind, reason, iso(now()), iso(expires) if expires else None,
+                                  int(kind in ("warn", "mute", "ban")), int(auto), rule))
+        return cur.lastrowid
+
+    def infraction(self, case_id):
+        return self.c.execute("SELECT * FROM infractions WHERE id=?", (case_id,)).fetchone()
+
+    def infractions_for(self, user_id, limit=50):
+        return self.c.execute("SELECT * FROM infractions WHERE user_id=? ORDER BY id DESC LIMIT ?", (user_id, limit)).fetchall()
+
+    def infraction_counts(self, user_id):
+        rows = self.c.execute("SELECT kind, COUNT(*) AS n FROM infractions WHERE user_id=? GROUP BY kind", (user_id,)).fetchall()
+        return {r["kind"]: r["n"] for r in rows}
+
+    def set_infraction_reason(self, case_id, reason):
+        with self.c:
+            return self.c.execute("UPDATE infractions SET reason=? WHERE id=?", (reason, case_id)).rowcount > 0
+
+    def delete_infraction(self, case_id):
+        with self.c:
+            return self.c.execute("DELETE FROM infractions WHERE id=?", (case_id,)).rowcount > 0
+
+    def end_infractions(self, user_id, kind):
+        """Mark a member's running mutes, bans or warnings as over (unmuted, unbanned, cleared, replaced)."""
+        with self.c:
+            return self.c.execute("UPDATE infractions SET active=0 WHERE user_id=? AND kind=? AND active=1", (user_id, kind)).rowcount
+
+    def end_infraction(self, case_id):
+        with self.c:
+            self.c.execute("UPDATE infractions SET active=0 WHERE id=?", (case_id,))
+
+    def active_warns(self, user_id, since):
+        return self.c.execute("SELECT COUNT(*) FROM infractions WHERE user_id=? AND kind='warn' AND active=1 "
+                              "AND datetime(created_at) >= datetime(?)", (user_id, iso(since))).fetchone()[0]
+
+    def clear_warns(self, user_id):
+        return self.end_infractions(user_id, "warn")
+
+    def due_expiries(self):
+        return self.c.execute("SELECT * FROM infractions WHERE active=1 AND kind IN ('ban','mute') AND expires_at IS NOT NULL "
+                              "AND datetime(expires_at) <= datetime(?)", (iso(now()),)).fetchall()
+
+    def running_mute(self, user_id):
+        return self.c.execute("SELECT * FROM infractions WHERE user_id=? AND kind='mute' AND active=1 AND expires_at IS NOT NULL "
+                              "AND datetime(expires_at) > datetime(?) ORDER BY id DESC LIMIT 1", (user_id, iso(now()))).fetchone()
+
+    # sticky roles
+    def save_sticky(self, user_id, role_ids):
+        with self.c:
+            self.c.execute("DELETE FROM sticky_roles WHERE user_id=?", (user_id,))
+            self.c.executemany("INSERT INTO sticky_roles VALUES (?,?)", [(user_id, r) for r in role_ids])
+
+    def take_sticky(self, user_id):
+        rows = self.c.execute("SELECT role_id FROM sticky_roles WHERE user_id=?", (user_id,)).fetchall()
+        with self.c:
+            self.c.execute("DELETE FROM sticky_roles WHERE user_id=?", (user_id,))
+        return [r["role_id"] for r in rows]
+
+    # channel locks
+    def save_lock(self, channel_id, target_id, scope, prev):
+        """Keeps the first saved state if the channel is already locked, so unlocking restores the real original."""
+        with self.c:
+            self.c.execute("INSERT OR IGNORE INTO locks VALUES (?,?,?,?)", (channel_id, target_id, scope, json.dumps(prev)))
+
+    def locks(self, scope=None, channel_id=None):
+        q, args = "SELECT * FROM locks WHERE 1=1", []
+        if scope:
+            q += " AND scope=?"
+            args.append(scope)
+        if channel_id:
+            q += " AND channel_id=?"
+            args.append(channel_id)
+        return [{"channel_id": r["channel_id"], "target_id": r["target_id"], "scope": r["scope"], "prev": json.loads(r["prev"])}
+                for r in self.c.execute(q, args).fetchall()]
+
+    def drop_locks(self, scope=None, channel_id=None):
+        q, args = "DELETE FROM locks WHERE 1=1", []
+        if scope:
+            q += " AND scope=?"
+            args.append(scope)
+        if channel_id:
+            q += " AND channel_id=?"
+            args.append(channel_id)
+        with self.c:
+            self.c.execute(q, args)
+
+    # suggestions
+    def add_suggestion(self, user_id, content, anonymous):
+        with self.c:
+            cur = self.c.execute("INSERT INTO suggestions (user_id, content, anonymous, created_at) VALUES (?,?,?,?)",
+                                 (user_id, content, int(anonymous), iso(now())))
+        return cur.lastrowid
+
+    def set_suggestion_message(self, sid, channel_id, message_id):
+        with self.c:
+            self.c.execute("UPDATE suggestions SET channel_id=?, message_id=? WHERE id=?", (channel_id, message_id, sid))
+
+    def drop_suggestion(self, sid):
+        with self.c:
+            self.c.execute("DELETE FROM suggestions WHERE id=?", (sid,))
+
+    def suggestion(self, sid):
+        return self.c.execute("SELECT * FROM suggestions WHERE id=?", (sid,)).fetchone()
+
+    def suggestion_by_message(self, message_id):
+        return self.c.execute("SELECT * FROM suggestions WHERE message_id=?", (message_id,)).fetchone()
+
+    def decide_suggestion(self, sid, status, by, reason):
+        with self.c:
+            self.c.execute("UPDATE suggestions SET status=?, decided_by=?, reason=? WHERE id=?", (status, by, reason, sid))
+
+    def vote_suggestion(self, sid, user_id, vote):
+        """Same vote twice takes it back; the other vote switches. Returns the member's vote now (0 for none)."""
+        cur = self.c.execute("SELECT vote FROM suggestion_votes WHERE suggestion_id=? AND user_id=?", (sid, user_id)).fetchone()
+        with self.c:
+            if cur and cur["vote"] == vote:
+                self.c.execute("DELETE FROM suggestion_votes WHERE suggestion_id=? AND user_id=?", (sid, user_id))
+                return 0
+            self.c.execute("INSERT OR REPLACE INTO suggestion_votes VALUES (?,?,?)", (sid, user_id, vote))
+        return vote
+
+    def suggestion_votes(self, sid):
+        r = self.c.execute("SELECT COALESCE(SUM(vote=1),0) AS up, COALESCE(SUM(vote=-1),0) AS down "
+                           "FROM suggestion_votes WHERE suggestion_id=?", (sid,)).fetchone()
+        return r["up"], r["down"]

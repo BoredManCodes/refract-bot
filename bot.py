@@ -21,6 +21,8 @@ from discord.ext import tasks
 from dotenv import load_dotenv
 
 import dashboard
+import modtools
+import suggestions
 import tickets
 import welcome
 from db import DB, iso, now
@@ -47,7 +49,7 @@ db.default("welcome_channel_id", os.environ.get("WELCOME_CHANNEL_ID"))
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True  # public #general preview on the website
-bot = discord.Client(intents=intents)
+bot = discord.Client(intents=intents, max_messages=5000)  # message cache feeds the deleted/edited logs
 tree = app_commands.CommandTree(bot)
 GUILD = discord.Object(GUILD_ID)
 
@@ -605,6 +607,7 @@ async def match_invite(guild):
 async def on_invite_create(invite):
     if invite.guild and invite.guild.id == GUILD_ID:
         invite_cache[invite.code] = (invite.uses or 0, invite.max_uses or 0, invite.inviter.id if invite.inviter else None)
+        await modtools.on_invite_create(invite)
 
 
 invites_group = app_commands.Group(name="invites", description="Invite tracking")
@@ -677,7 +680,9 @@ async def on_member_join(member):
     embed.add_field(name="Invited by", value=f"<@{inviter_id}> (`{code}`)" if inviter_id else
                     (f"Unknown (`{code}`)" if code else "Unknown"))
     embed.set_footer(text=f"ID {member.id}")
-    await post(member.guild, "modlog_channel_id", embed=embed)
+    await modtools.log_to(member.guild, "members", embed)
+    if await modtools.on_join(member):
+        return  # turned away by raid mode or the join gate
     if not member.bot:
         spawn_welcome(member, "welcome")
 
@@ -694,7 +699,8 @@ async def on_member_remove(member):
     if roles:
         embed.add_field(name="Roles", value=" ".join(roles)[:1024], inline=False)
     embed.set_footer(text=f"ID {member.id}")
-    await post(member.guild, "modlog_channel_id", embed=embed)
+    await modtools.log_to(member.guild, "members", embed)
+    modtools.on_leave(member)
     if not member.bot:
         await record_departure(member)
         spawn_welcome(member, "leave")
@@ -721,8 +727,11 @@ async def record_departure(member):
 
 @bot.event
 async def on_member_unban(guild, user):
-    if guild.id == GUILD_ID and db.has_departure(user.id):
+    if guild.id != GUILD_ID:
+        return
+    if db.has_departure(user.id):
         db.set_departure_kind(user.id, "unbanned")
+    await modtools.on_unban(guild, user)
 
 
 async def backfill_bans(guild):
@@ -759,7 +768,7 @@ async def on_interaction(interaction):
     embed.set_author(name=f"{interaction.user} ({interaction.user.id})", icon_url=interaction.user.display_avatar.url)
     if interaction.channel:
         embed.add_field(name="Channel", value=f"<#{interaction.channel.id}>")
-    await post(interaction.guild, "modlog_channel_id", embed=embed)
+    await modtools.log_to(interaction.guild, "commands", embed)
 
 
 # ---------- support tickets ----------
@@ -1681,7 +1690,9 @@ async def setup(interaction: discord.Interaction):
                           ("elections_channel_id", "elections", public_ro),
                           ("log_channel_id", "admin-actions", public_ro),
                           ("modlog_channel_id", "mod-log", modlog_ow),
-                          ("tickets_log_channel_id", "ticket-logs", staff_ow)):
+                          ("tickets_log_channel_id", "ticket-logs", staff_ow),
+                          ("suggestions_channel_id", "suggestions", public_ro),
+                          ("suggestion_log_channel_id", "suggestion-log", staff_ow)):
         if channel(g, key) is None:
             ch = await g.create_text_channel(name, overwrites=ow)
             db.put(key, ch.id)
@@ -1699,6 +1710,11 @@ async def setup_hook():
     tree.add_command(election, guild=GUILD)
     tree.add_command(invites_group, guild=GUILD)
     tree.add_command(ticket_group, guild=GUILD)
+    modtools.init(bot, db, GUILD_ID, is_owner, is_staff, is_support)
+    suggestions.init(bot, db, is_staff, is_support)
+    modtools.register(tree, GUILD)
+    suggestions.register(tree, GUILD)
+    modtools.install()
     await tree.sync(guild=GUILD)
     scheduler.start()
     if API_TOKEN:
