@@ -935,7 +935,11 @@ async def inline_images(snaps):
                         ctype = r.headers.get("Content-Type", "").split(";")[0]
                         if r.status != 200 or not ctype.startswith("image/") or (r.content_length or 0) > limit:
                             continue
-                        data = await r.content.read(limit + 1)
+                        data = b""
+                        async for chunk in r.content.iter_chunked(65536):  # read() alone returns only the first chunk
+                            data += chunk
+                            if len(data) > limit:
+                                break
                 except Exception:
                     continue
                 if len(data) > limit:
