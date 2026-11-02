@@ -65,9 +65,8 @@ class SuggestionView(discord.ui.View):
         await self.vote(interaction, -1)
 
 
-@app_commands.command(name="suggest", description="Suggest an idea for the server")
-@app_commands.describe(idea="What you would like to see")
-async def suggest(interaction: discord.Interaction, idea: app_commands.Range[str, 5, 1500]):
+async def submit(interaction, idea):
+    """Post a member's idea to the suggestions channel. Used by /suggest and the panel's form."""
     ch = interaction.guild.get_channel(db.get_int("suggestions_channel_id") or 0)
     if ch is None:
         return await interaction.response.send_message("Suggestions are not set up yet.", ephemeral=True)
@@ -82,7 +81,41 @@ async def suggest(interaction: discord.Interaction, idea: app_commands.Range[str
         db.drop_suggestion(sid)
         return await interaction.response.send_message("I could not post in the suggestions channel.", ephemeral=True)
     db.set_suggestion_message(sid, ch.id, msg.id)
+    try:
+        await msg.create_thread(name=f"Suggestion #{sid}", auto_archive_duration=10080)
+    except discord.HTTPException:
+        pass  # no thread permission; voting still works
     await interaction.response.send_message(f"Posted as suggestion #{sid}: {msg.jump_url}", ephemeral=True)
+
+
+@app_commands.command(name="suggest", description="Suggest an idea for the server")
+@app_commands.describe(idea="What you would like to see")
+async def suggest(interaction: discord.Interaction, idea: app_commands.Range[str, 5, 1500]):
+    await submit(interaction, idea)
+
+
+class SuggestModal(discord.ui.Modal, title="Make a suggestion"):
+    idea = discord.ui.TextInput(label="Your idea", style=discord.TextStyle.paragraph, min_length=5, max_length=1500,
+                                placeholder="What would you like to see on the server?")
+
+    async def on_submit(self, interaction):
+        await submit(interaction, self.idea.value.strip())
+
+
+class SuggestionPanel(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Make a suggestion", style=discord.ButtonStyle.primary, custom_id="sug:new", emoji="💡")
+    async def new(self, interaction, button):
+        await interaction.response.send_modal(SuggestModal())
+
+
+async def post_panel(channel):
+    embed = discord.Embed(title="Got an idea?", colour=discord.Colour.blurple(),
+                          description="Press the button and tell us what you would like to see. Your idea is posted here, "
+                                      "everyone can vote on it, and staff reply with a decision.")
+    await channel.send(embed=embed, view=SuggestionPanel())
 
 
 group = app_commands.Group(name="suggestion", description="Handle member suggestions")
@@ -95,6 +128,7 @@ async def settle(guild, by, number, status, reason):
     db.decide_suggestion(number, status, by.id, reason[:1000])
     row = db.suggestion(number)
     up, down = db.suggestion_votes(number)
+    colour, label = STATUS[status]
     ch = guild.get_channel(row["channel_id"] or 0)
     jump = ""
     if ch is not None:
@@ -102,9 +136,11 @@ async def settle(guild, by, number, status, reason):
             msg = await ch.fetch_message(row["message_id"])
             await msg.edit(embed=suggestion_embed(row, guild), view=SuggestionView(up, down, closed=True))
             jump = msg.jump_url
+            if msg.thread is not None:
+                await msg.thread.send(f"Decided: **{label.lower()}**" + (f". {reason[:500]}" if reason else ""))
+                await msg.thread.edit(archived=True, locked=True)
         except discord.HTTPException:
             pass
-    colour, label = STATUS[status]
     e = discord.Embed(title=f"Suggestion #{number} {label.lower()}", colour=colour, timestamp=now(), description=row["content"][:1500])
     e.add_field(name="Decided by", value=by.mention)
     e.add_field(name="Votes", value=f"{up} up, {down} down")
@@ -163,6 +199,19 @@ async def info(interaction: discord.Interaction, number: int):
                                             allowed_mentions=discord.AllowedMentions.none())
 
 
+@group.command(name="panel", description="Post the Make a suggestion button (admin)")
+@app_commands.describe(channel="Where to post it; defaults to the suggestions channel")
+async def panel(interaction: discord.Interaction, channel: discord.TextChannel = None):
+    if not _is_staff(interaction.user):
+        return await interaction.response.send_message("Not allowed.", ephemeral=True)
+    channel = channel or interaction.guild.get_channel(db.get_int("suggestions_channel_id") or 0) or interaction.channel
+    try:
+        await post_panel(channel)
+    except discord.HTTPException:
+        return await interaction.response.send_message(f"I could not post in {channel.mention}.", ephemeral=True)
+    await interaction.response.send_message(f"Posted in {channel.mention}.", ephemeral=True)
+
+
 @group.command(name="config", description="Suggestion channels and anonymous mode (admin)")
 @app_commands.describe(channel="Where suggestions are posted", log_channel="Where decisions are logged",
                        anonymous="Hide the author's name on new suggestions")
@@ -187,5 +236,6 @@ COMMANDS = (suggest, group)
 
 def register(tree, guild):
     bot.add_view(SuggestionView())
+    bot.add_view(SuggestionPanel())
     for cmd in COMMANDS:
         tree.add_command(cmd, guild=guild)

@@ -175,7 +175,22 @@ async def suggestions_page(request: Request, status: str = "pending", s: Sess = 
                      "anonymous": bool(r["anonymous"]), "created": r["created_at"], "reason": r["reason"], "up": up, "down": down,
                      "decided_by": uname(guild, r["decided_by"]) if r["decided_by"] else ""})
     return render(request, s, "suggestions.html", rows=rows, status=status, statuses=SUGGESTION_STATUS, decisions=DECISIONS,
-                  can_act=s.access.can("moderation.act"))
+                  can_act=s.access.can("moderation.act"), can_panel=s.access.can("moderation.admin"),
+                  channels=list(guild.text_channels), default_channel=ctx.db.get_int("suggestions_channel_id"))
+
+
+@router.post("/suggestions/panel")
+async def suggestions_panel(request: Request, channel_id: str = Form(""), s: Sess = Depends(need("moderation.admin", post=True))):
+    ctx, guild = ctx_of(request), guild_of(request)
+    ch = guild.get_channel(int(channel_id)) if channel_id.isdigit() else None
+    if not isinstance(ch, discord.TextChannel):
+        return back(request, "/suggestions", "err", "Pick a text channel.")
+    try:
+        await ctx.suggestions.post_panel(ch)
+    except discord.HTTPException:
+        return back(request, "/suggestions", "err", f"I could not post in #{ch.name}.")
+    audit(request, s, "suggestions.panel", f"#{ch.name}")
+    return back(request, "/suggestions", "ok", f"Panel posted in #{ch.name}.")
 
 
 @router.post("/suggestions/{number}/{status}")

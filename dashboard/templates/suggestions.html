@@ -23,4 +23,12 @@
   {% endif %}
 </div></div>
 {% else %}<p class="text-secondary">No suggestions.</p>{% endfor %}
+{% if can_panel %}
+<div class="row"><div class="col-lg-5"><div class="card"><div class="card-header"><h3 class="card-title">Post the suggestion panel</h3></div>
+  <form method="post" action="/suggestions/panel" class="card-body"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <p class="text-secondary small">A "Make a suggestion" button that opens a form, like the ticket panel.</p>
+    <div class="mb-3"><label class="form-label">Channel</label>
+      <select class="form-select" name="channel_id">{% for c in channels %}<option value="{{ c.id }}" {% if c.id == default_channel %}selected{% endif %}>#{{ c.name }}</option>{% endfor %}</select></div>
+    <button class="btn">Post panel</button></form></div></div></div>
+{% endif %}
 {% endblock %}

@@ -40,11 +40,12 @@ class ModDashboardTest(unittest.TestCase):
         modtools.db = self.db
         self.user_found = SimpleNamespace(id=77, bot=False, __str__=lambda self: "gone#0")
         self.settle = AsyncMock(return_value="Approved")
+        self.panel = AsyncMock()
         ctx = SimpleNamespace(
             bot=SimpleNamespace(application_id=1, fetch_user=AsyncMock(return_value=self.user_found)), db=self.db,
             guild=lambda: self.guild, owner_ids=set(), base_url="http://localhost", client_secret="x", session_secret=SECRET,
             transcript_base_url="", ticket_kinds={}, head_admin=lambda g: None, mod=modtools,
-            suggestions=SimpleNamespace(settle=self.settle))
+            suggestions=SimpleNamespace(settle=self.settle, post_panel=self.panel))
         self.client = TestClient(create_app(ctx), follow_redirects=False)
         self.as_user(OWNER)
         for name in ("log_to", "apply", "start_raid", "stop_raid", "lockdown_server", "lift_lockdown"):
@@ -185,6 +186,18 @@ class ModDashboardTest(unittest.TestCase):
         self.assertEqual(self.post(f"/suggestions/{sid}/exploded").status_code, 404)
         self.settle.return_value = None
         self.assertEqual(self.post("/suggestions/99/denied").status_code, 404)
+
+    def test_suggestion_panel_button(self):
+        self.assertEqual(self.post("/suggestions/panel", channel_id="300").status_code, 303)
+        self.panel.assert_awaited_once()
+        self.assertEqual(self.panel.await_args.args[0].id, 300)
+        self.post("/suggestions/panel", channel_id="999")
+        self.assertEqual(self.panel.await_count, 1)
+        self.assertIn("Post the suggestion panel", self.client.get("/suggestions").text)
+        self.db.add_grant("user", STAFF, "moderation.act")
+        self.as_user(STAFF)
+        self.assertEqual(self.post("/suggestions/panel", channel_id="300").status_code, 403)
+        self.assertNotIn("Post the suggestion panel", self.client.get("/suggestions").text)
 
     # ---- AutoMod ----
 
@@ -339,6 +352,8 @@ class Settle(unittest.TestCase):
         self.sid = self.db.add_suggestion(5, "more cake", False)
         self.post_msg = MagicMock()
         self.post_msg.edit, self.post_msg.jump_url = AsyncMock(), "https://x/jump"
+        self.post_msg.thread = MagicMock()
+        self.post_msg.thread.send, self.post_msg.thread.edit = AsyncMock(), AsyncMock()
         self.channel = MagicMock()
         self.channel.id, self.channel.fetch_message = 300, AsyncMock(return_value=self.post_msg)
         self.db.set_suggestion_message(self.sid, 300, 800)
@@ -359,8 +374,30 @@ class Settle(unittest.TestCase):
         row = self.db.suggestion(self.sid)
         self.assertEqual((row["status"], row["decided_by"], row["reason"]), ("approved", 9, "good one"))
         self.post_msg.edit.assert_awaited_once()
+        self.post_msg.thread.edit.assert_awaited_once_with(archived=True, locked=True)
         self.log.send.assert_awaited_once()
         self.author.send.assert_awaited_once()
+
+    def test_new_suggestion_gets_a_thread(self):
+        self.db.put("suggestions_channel_id", 300)
+        msg = MagicMock()
+        msg.id, msg.jump_url, msg.create_thread = 801, "https://x/j", AsyncMock()
+        self.channel.send = AsyncMock(return_value=msg)
+        self.guild.get_member = lambda uid: None
+        i = MagicMock()
+        i.guild, i.user.id = self.guild, 42
+        i.response.send_message = AsyncMock()
+        asyncio.run(suggestions.submit(i, "a brand new idea"))
+        name = msg.create_thread.await_args.kwargs["name"]
+        self.assertTrue(name.startswith("Suggestion #"))
+
+    def test_panel_posts_an_embed_with_the_button(self):
+        ch = MagicMock()
+        ch.send = AsyncMock()
+        asyncio.run(suggestions.post_panel(ch))
+        kw = ch.send.await_args.kwargs
+        self.assertEqual(kw["embed"].title, "Got an idea?")
+        self.assertEqual([c.custom_id for c in kw["view"].children], ["sug:new"])
 
     def test_unknown_suggestion_is_none_and_touches_nothing(self):
         self.assertIsNone(asyncio.run(suggestions.settle(self.guild, self.by, 999, "denied", "")))
