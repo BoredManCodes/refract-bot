@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Mod logs{% endblock %}
+{% block body %}
+<h2 class="mb-1">Mod logs</h2>
+<p class="text-secondary">Where each kind of log is posted. A kind with no channel follows the Mod log channel from Settings. Voice logs stay off until you give them a channel.</p>
+<form method="post" action="/modlogs" class="card mb-4"><div class="card-body"><input type="hidden" name="csrf" value="{{ csrf }}"><div class="row">
+  {% for key, text, current, quiet in cats %}
+  <div class="col-md-6 mb-3"><label class="form-label">{{ key }} <span class="text-secondary small">{{ text }}</span></label>
+    <select class="form-select" name="logch_{{ key }}"><option value="">{{ '(off)' if quiet else '(Mod log channel)' }}</option>
+      {% for c in channels %}<option value="{{ c.id }}" {% if c.id == current %}selected{% endif %}>#{{ c.name }}</option>{% endfor %}</select></div>
+  {% endfor %}
+</div></div><div class="card-footer"><button class="btn btn-primary">Save</button></div></form>
+
+<div class="row row-cards">
+  <div class="col-lg-6"><div class="card"><div class="card-header"><h3 class="card-title">Sticky roles</h3></div>
+    <form method="post" action="/modlogs/sticky" class="card-body"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <p class="text-secondary small">Give members their roles back when they rejoin. Admin, Head Admin, Staff, bot-managed roles and roles with moderation or management permissions are never restored.</p>
+      <div class="mb-3"><label class="form-label">Sticky roles</label>
+        <select class="form-select" name="enabled" style="max-width:160px"><option value="1" {% if sticky %}selected{% endif %}>On</option><option value="0" {% if not sticky %}selected{% endif %}>Off</option></select></div>
+      <div class="mb-3"><label class="form-label">Never restore</label>
+        <div class="mb-2">{% for rid, name in excluded %}<button class="badge bg-secondary-lt border-0 me-1 mb-1" name="remove_role" value="{{ rid }}" title="Allow again">{{ name }} &times;</button>{% else %}<span class="text-secondary small">No extra roles.</span>{% endfor %}</div>
+        <select class="form-select" name="exclude_role"><option value="">Add a role to the list</option>{% for r in roles %}<option value="{{ r.id }}">{{ r.name }}</option>{% endfor %}</select></div>
+      <button class="btn btn-primary">Save</button></form></div></div>
+
+  <div class="col-lg-6"><div class="card"><div class="card-header"><h3 class="card-title">Suggestions</h3></div>
+    <form method="post" action="/modlogs/suggestions" class="card-body"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="mb-3"><label class="form-label">Suggestions channel</label>
+        <select class="form-select" name="channel_id"><option value="">(not set)</option>{% for c in channels %}<option value="{{ c.id }}" {% if c.id == suggest_channel %}selected{% endif %}>#{{ c.name }}</option>{% endfor %}</select></div>
+      <div class="mb-3"><label class="form-label">Decision log channel</label>
+        <select class="form-select" name="log_channel_id"><option value="">(not set)</option>{% for c in channels %}<option value="{{ c.id }}" {% if c.id == suggest_log %}selected{% endif %}>#{{ c.name }}</option>{% endfor %}</select></div>
+      <div class="mb-3"><label class="form-label">Hide the author's name on new suggestions</label>
+        <select class="form-select" name="anonymous" style="max-width:160px"><option value="0" {% if not anonymous %}selected{% endif %}>No</option><option value="1" {% if anonymous %}selected{% endif %}>Yes</option></select></div>
+      <button class="btn btn-primary">Save</button></form></div></div>
+</div>
+{% endblock %}

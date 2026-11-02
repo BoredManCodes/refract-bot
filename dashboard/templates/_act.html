@@ -1,0 +1,20 @@
+<div class="card"><div class="card-header"><h3 class="card-title">Take an action</h3></div>
+  <form method="post" action="/moderation/act" class="card-body">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="mb-3"><label class="form-label">Member (type a name, then pick from the list, or paste their user ID; bans and unbans also take IDs of people who left)</label>
+      <input class="form-control" name="user" value="{{ prefill or '' }}" list="member-options" autocomplete="off" required
+             hx-get="/members/options" hx-trigger="input changed delay:300ms" hx-target="#member-options" hx-swap="innerHTML" hx-vals="js:{q: event.target.value}">
+      <datalist id="member-options"></datalist></div>
+    <div class="row">
+      <div class="col-md-4 mb-3"><label class="form-label">Action</label>
+        <select class="form-select" name="kind">{% for k in kinds %}<option value="{{ k }}">{{ k }}</option>{% endfor %}</select></div>
+      <div class="col-md-4 mb-3"><label class="form-label">Duration</label>
+        <input class="form-control" name="duration" placeholder="30m, 2h, 7d"><div class="form-hint">Mute defaults to 1h (28 days at most). Ban: empty is permanent.</div></div>
+      <div class="col-md-4 mb-3"><label class="form-label">Delete message days (ban)</label>
+        <input class="form-control" type="number" name="delete_days" min="0" max="7" value="0"></div>
+    </div>
+    <div class="mb-3"><label class="form-label">Reason</label><input class="form-control" name="reason" maxlength="500"></div>
+    <div class="mb-3"><label class="form-label">Tell the member by DM (warn, mute, kick, ban)</label>
+      <select class="form-select" name="dm" style="max-width:120px"><option value="1">Yes</option><option value="0">No</option></select></div>
+    <div><button class="btn btn-primary">Apply</button></div>
+  </form></div>

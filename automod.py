@@ -343,3 +343,44 @@ class JoinRate:
 
     def reset(self):
         self.times.clear()
+
+
+# ---------- editing ----------
+
+def set_rule(cfg, name, enabled=None, action=None, duration=None, limit=None, seconds=None, mode=None):
+    """Edit one rule in `cfg` in place. Raises ValueError with a message for the person editing."""
+    if name not in RULES:
+        raise ValueError(f"No rule called {name}")
+    r = cfg["rules"][name]
+    if action is not None and action not in ACTIONS:
+        raise ValueError(f"Action must be one of {', '.join(ACTIONS)}")
+    if mode is not None and (name != "links" or mode not in ("blocklist", "allowlist")):
+        raise ValueError("Only the links rule has a mode: blocklist or allowlist")
+    for key, val, low, high in (("limit", limit, 1, 1000), ("seconds", seconds, 1, 600)):
+        if val is not None:
+            if key not in r:
+                raise ValueError(f"The {name} rule has no {key}")
+            if not low <= val <= high:
+                raise ValueError(f"{key} must be between {low} and {high}")
+    if duration is not None:
+        r["duration"] = min(parse_duration(duration), MAX_TIMEOUT)
+    if limit is not None:
+        r["limit"] = limit
+    if seconds is not None:
+        r["seconds"] = seconds
+    if mode is not None:
+        r["mode"] = mode
+    if action is not None:
+        r["action"] = action
+    if enabled is not None:
+        r["enabled"] = bool(enabled)
+
+
+def set_step(cfg, count, action, duration="1h"):
+    """Add or replace the escalation step that fires at `count` warnings. ValueError on bad input."""
+    if action not in ("mute", "kick", "ban"):
+        raise ValueError("Pick mute, kick or ban")
+    if not 1 <= count <= 50:
+        raise ValueError("Warnings must be between 1 and 50")
+    seconds = min(parse_duration(duration), MAX_TIMEOUT) if action == "mute" else 0
+    cfg["escalation"] = [s for s in cfg["escalation"] if s["count"] != count] + [{"count": count, "action": action, "seconds": seconds}]

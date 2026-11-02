@@ -13,14 +13,24 @@ PERMS = {
     "members.view": "Browse members and invite stats",
     "adminlog.post": "Post to the public admin log",
     "settings.edit": "Change which roles and channels the bot uses",
+    "moderation.view": "See cases, member histories and suggestions",
+    "moderation.act": "Warn, mute, kick, ban, unban, add notes, edit case reasons, decide suggestions (includes view)",
+    "moderation.admin": "Change AutoMod, join gate, raid mode, lockdown and log channels; delete cases (includes act and view)",
 }
-IMPLIED_BY = {"tickets.view": {"tickets.manage"}}
+IMPLIED_BY = {"tickets.view": {"tickets.manage"},
+              "moderation.view": {"moderation.act", "moderation.admin"},
+              "moderation.act": {"moderation.admin"}}
 
 NAV = [("/", "Overview", None),
        ("/tickets", "Tickets", "tickets.view"),
        ("/applications", "Applications", "applications.review"),
        ("/elections", "Elections", "elections.manage"),
        ("/members", "Members", "members.view"),
+       ("/moderation", "Moderation", "moderation.view"),
+       ("/suggestions", "Suggestions", "moderation.view"),
+       ("/automod", "AutoMod", "moderation.admin"),
+       ("/lockdown", "Lockdown", "moderation.admin"),
+       ("/modlogs", "Mod logs", "moderation.admin"),
        ("/adminlog", "Admin log", "adminlog.post"),
        ("/settings", "Settings", "settings.edit"),
        ("/permissions", "Permissions", "owner"),

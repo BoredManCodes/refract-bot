@@ -17,6 +17,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from .core import NAV, Denied, LoginRequired
+from .modviews import router as mod_router
 from .views import router
 
 log = logging.getLogger("refract.dashboard")
@@ -94,6 +95,7 @@ def create_app(ctx):
         return RedirectResponse(nxt if nxt.startswith("/") and not nxt.startswith("//") else "/", status_code=303)
 
     app.include_router(router)
+    app.include_router(mod_router)
     return app
 
 

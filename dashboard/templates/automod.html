@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}AutoMod{% endblock %}
+{% block body %}
+<div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+  <h2 class="mb-0 me-auto">AutoMod</h2>
+  <span class="badge {{ 'bg-green-lt' if c.enabled else 'bg-secondary-lt' }}">{{ 'on' if c.enabled else 'off' }}</span>
+  <form method="post" action="/automod/toggle"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="enabled" value="{{ '0' if c.enabled else '1' }}"><button class="btn {{ '' if c.enabled else 'btn-primary' }}">Turn {{ 'off' if c.enabled else 'on' }}</button></form>
+</div>
+<p class="text-secondary">Staff are never checked. Every hit deletes the message first, then applies the rule's action. Warnings feed the ladder below.</p>
+
+<div class="row row-cards mb-4">
+{% for name in rules %}{% set r = c.rules[name] %}
+  <div class="col-md-6 col-xl-4"><div class="card h-100"><div class="card-body">
+    <div class="d-flex align-items-center mb-1"><h3 class="card-title mb-0 me-auto">{{ name }}</h3>
+      <span class="badge {{ 'bg-green-lt' if r.enabled else 'bg-secondary-lt' }}">{{ 'on' if r.enabled else 'off' }}</span></div>
+    <div class="text-secondary small mb-3">{{ help[name] }}</div>
+    <form method="post" action="/automod/rule/{{ name }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="row">
+        <div class="col-6 mb-2"><label class="form-label">Rule</label>
+          <select class="form-select" name="enabled"><option value="1" {% if r.enabled %}selected{% endif %}>On</option><option value="0" {% if not r.enabled %}selected{% endif %}>Off</option></select></div>
+        <div class="col-6 mb-2"><label class="form-label">Action</label>
+          <select class="form-select" name="action">{% for a in actions %}<option value="{{ a }}" {% if r.action == a %}selected{% endif %}>{{ a }}</option>{% endfor %}</select></div>
+        <div class="col-6 mb-2"><label class="form-label">Mute length</label><input class="form-control" name="duration" value="{{ fmt(r.duration) }}"></div>
+        {% if 'limit' in r %}<div class="col-6 mb-2"><label class="form-label">Limit ({{ units[name] }})</label><input class="form-control" type="number" name="limit" min="1" max="1000" value="{{ r.limit }}"></div>{% endif %}
+        {% if 'seconds' in r %}<div class="col-6 mb-2"><label class="form-label">Window (seconds)</label><input class="form-control" type="number" name="seconds" min="1" max="600" value="{{ r.seconds }}"></div>{% endif %}
+        {% if name == 'links' %}<div class="col-6 mb-2"><label class="form-label">Mode</label>
+          <select class="form-select" name="mode"><option value="blocklist" {% if r.mode == 'blocklist' %}selected{% endif %}>Block listed</option><option value="allowlist" {% if r.mode == 'allowlist' %}selected{% endif %}>Allow only listed</option></select></div>{% endif %}
+      </div>
+      <button class="btn btn-sm btn-primary mt-2">Save</button>
+    </form>
+  </div></div></div>
+{% endfor %}
+</div>
+
+<div class="row row-cards mb-4">
+  <div class="col-lg-6"><div class="card"><div class="card-header"><h3 class="card-title">Lists</h3></div><div class="card-body">
+    {% for kind, label, items in [('word', 'Blocked words', c.rules.words.list), ('blocked_link', 'Blocked domains', c.rules.links.block), ('allowed_link', 'Allowed domains (allowlist mode)', c.rules.links.allow), ('allowed_invite', 'Allowed invite codes', c.rules.invites.allow)] %}
+    <div class="mb-4">
+      <label class="form-label">{{ label }} ({{ items|length }})</label>
+      {% if kind == 'word' %}<div class="form-hint mb-1">Whole words match, with look-alike letters and repeats folded. <code>*</code> is a wildcard; a leading <code>~</code> also matches inside other words.</div>{% endif %}
+      <details class="mb-2"><summary class="text-secondary small">{{ 'Show (may contain offensive words)' if kind == 'word' else 'Show' }}</summary>
+        <div class="mt-2">{% for x in items %}
+          <form method="post" action="/automod/list" class="d-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="kind" value="{{ kind }}">
+            <input type="hidden" name="op" value="remove"><input type="hidden" name="value" value="{{ x }}">
+            <button class="badge bg-secondary-lt border-0 me-1 mb-1" title="Remove">{{ x }} &times;</button></form>
+        {% else %}<span class="text-secondary small">Empty.</span>{% endfor %}</div></details>
+      <form method="post" action="/automod/list" class="d-flex gap-2"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="kind" value="{{ kind }}"><input type="hidden" name="op" value="add">
+        <input class="form-control" name="value" placeholder="Add one" required><button class="btn">Add</button></form>
+    </div>
+    {% endfor %}
+  </div></div></div>
+
+  <div class="col-lg-6">
+    <div class="card mb-3"><div class="card-header"><h3 class="card-title">Warning ladder</h3></div>
+      <div class="card-body"><p class="text-secondary small">A step fires when a member reaches exactly that many active warnings within the last {{ c.warn_window_days }} days.</p>
+        {% for st in steps %}
+        <form method="post" action="/automod/ladder" class="d-flex align-items-center gap-2 mb-2"><input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="warnings" value="{{ st.count }}"><input type="hidden" name="remove" value="1">
+          <span class="me-auto">{{ st.count }} warnings: <b>{{ st.action }}</b>{% if st.action == 'mute' %} {{ fmt(st.seconds) }}{% endif %}</span><button class="btn btn-sm">Remove</button></form>
+        {% else %}<p class="text-secondary">No steps. Warnings never escalate.</p>{% endfor %}
+        <form method="post" action="/automod/ladder" class="row g-2 mt-2"><input type="hidden" name="csrf" value="{{ csrf }}">
+          <div class="col-3"><input class="form-control" type="number" name="warnings" min="1" max="50" placeholder="Warns" required></div>
+          <div class="col-4"><select class="form-select" name="action"><option>mute</option><option>kick</option><option>ban</option></select></div>
+          <div class="col-3"><input class="form-control" name="duration" value="1h" title="Mute length"></div>
+          <div class="col-2"><button class="btn w-100">Set</button></div></form>
+        <div class="form-hint mt-1">Setting a count that already has a step replaces it.</div>
+      </div></div>
+
+    <div class="card mb-3"><div class="card-header"><h3 class="card-title">Options</h3></div>
+      <form method="post" action="/automod/options" class="card-body"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <div class="row">
+          <div class="col-4 mb-2"><label class="form-label">DM members</label>
+            <select class="form-select" name="dm"><option value="1" {% if c.dm %}selected{% endif %}>Yes</option><option value="0" {% if not c.dm %}selected{% endif %}>No</option></select></div>
+          <div class="col-4 mb-2"><label class="form-label">Notice (seconds)</label><input class="form-control" type="number" name="notice_seconds" min="0" max="60" value="{{ c.notice_seconds }}"></div>
+          <div class="col-4 mb-2"><label class="form-label">Warning window (days)</label><input class="form-control" type="number" name="warn_window_days" min="1" max="365" value="{{ c.warn_window_days }}"></div>
+        </div><button class="btn btn-sm btn-primary">Save</button></form></div>
+
+    <div class="card"><div class="card-header"><h3 class="card-title">Skipped channels and roles</h3></div>
+      <div class="card-body">
+        {% for rule, kind, ident, label in exempt %}
+        <form method="post" action="/automod/exempt" class="d-flex align-items-center gap-2 mb-2"><input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="kind" value="{{ kind }}"><input type="hidden" name="target_id" value="{{ ident }}"><input type="hidden" name="rule" value="{{ rule }}"><input type="hidden" name="remove" value="1">
+          <span class="me-auto">{{ label }} <span class="badge bg-secondary-lt">{{ 'all rules' if rule == 'all' else rule }}</span></span><button class="btn btn-sm">Remove</button></form>
+        {% else %}<p class="text-secondary">Nothing skipped.</p>{% endfor %}
+        <form method="post" action="/automod/exempt" class="row g-2 mt-2"><input type="hidden" name="csrf" value="{{ csrf }}">
+          <div class="col-12"><select class="form-select" onchange="var o=this.selectedOptions[0]; this.form.kind.value=o.dataset.kind; this.form.target_id.value=o.value">
+            <option value="" disabled selected>Channel or role</option>
+            <optgroup label="Channels">{% for ch in channels %}<option value="{{ ch.id }}" data-kind="channel">#{{ ch.name }}</option>{% endfor %}</optgroup>
+            <optgroup label="Roles">{% for ro in roles %}<option value="{{ ro.id }}" data-kind="role">{{ ro.name }}</option>{% endfor %}</optgroup></select>
+            <input type="hidden" name="kind" value=""><input type="hidden" name="target_id" value=""></div>
+          <div class="col-8"><select class="form-select" name="rule"><option value="all">All rules</option>{% for n in rules %}<option>{{ n }}</option>{% endfor %}</select></div>
+          <div class="col-4"><button class="btn w-100">Skip it</button></div></form>
+      </div></div>
+  </div>
+</div>
+{% endblock %}

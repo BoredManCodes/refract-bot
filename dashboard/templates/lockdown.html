@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Lockdown{% endblock %}
+{% block body %}
+<h2 class="mb-3">Lockdown, raid mode and join gate</h2>
+<div class="row row-cards">
+  <div class="col-lg-6"><div class="card"><div class="card-header"><h3 class="card-title">Server lockdown</h3>
+      <div class="card-actions"><span class="badge {{ 'bg-red-lt' if lockdown else 'bg-green-lt' }}">{{ 'locked down' if lockdown else 'normal' }}</span></div></div>
+    <div class="card-body">
+    {% if lockdown %}
+      <p>Started by {{ lockdown.by }} on {{ lockdown.at|dt }}. {{ lockdown.channels }} channels locked.{% if lockdown.reason %} Reason: {{ lockdown.reason }}{% endif %}</p>
+      <form method="post" action="/lockdown/lift" class="d-flex gap-2"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <input class="form-control" name="reason" placeholder="Note for the log (optional)"><button class="btn btn-primary">Lift lockdown</button></form>
+    {% else %}
+      <p class="text-secondary">Locks every public text channel for members. Staff keep talking. Lifting restores each channel's permissions exactly as they were.</p>
+      <form method="post" action="/lockdown/start" onsubmit="return confirm('Lock every public channel now?')"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <div class="mb-2"><input class="form-control" name="reason" placeholder="Reason (shown in channels)" maxlength="500"></div>
+        <div class="mb-3"><select class="form-select" name="announce" style="max-width:260px"><option value="1">Post a notice in each channel</option><option value="0">Lock silently</option></select></div>
+        <button class="btn btn-danger">Lock down the server</button></form>
+    {% endif %}
+    {% if single_locks %}<hr><div class="text-secondary small">Channels locked on their own (use /unlock):
+      {% for cid, ch in single_locks %}<span class="badge bg-secondary-lt me-1">{{ '#' ~ ch.name if ch else cid }}</span>{% endfor %}</div>{% endif %}
+    <hr><label class="form-label">Never locked by a lockdown</label>
+    {% for cid, label in exempt %}
+      <form method="post" action="/lockdown/exempt" class="d-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="channel_id" value="{{ cid }}"><input type="hidden" name="remove" value="1">
+        <button class="badge bg-secondary-lt border-0 me-1 mb-1" title="Remove">{{ label }} &times;</button></form>
+    {% else %}<div class="text-secondary small mb-1">No extra channels. The applications, ticket log and mod log channels are always skipped.</div>{% endfor %}
+    <form method="post" action="/lockdown/exempt" class="d-flex gap-2 mt-2"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <select class="form-select" name="channel_id">{% for ch in channels %}<option value="{{ ch.id }}">#{{ ch.name }}</option>{% endfor %}</select><button class="btn">Add</button></form>
+    </div></div></div>
+
+  <div class="col-lg-6">
+    <div class="card mb-3"><div class="card-header"><h3 class="card-title">Raid mode</h3>
+        <div class="card-actions"><span class="badge {{ 'bg-red-lt' if raid.on else 'bg-green-lt' }}">{{ 'on' if raid.on else 'off' }}</span></div></div>
+      <div class="card-body">
+      {% if raid.on %}
+        <p>New members get {{ past[raid.action] }}.{% if raid.until %} Ends {{ raid.until|dt }}.{% else %} Stays on until turned off.{% endif %}</p>
+        <form method="post" action="/raid/stop"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-primary">Turn off</button></form>
+      {% else %}
+        <p class="text-secondary">Every new member gets the chosen action until it ends.</p>
+        <form method="post" action="/raid/start" class="row g-2" onsubmit="return confirm('Start raid mode? Every new member will be turned away.')"><input type="hidden" name="csrf" value="{{ csrf }}">
+          <div class="col-4"><label class="form-label">New members get</label><select class="form-select" name="action"><option>kick</option><option>ban</option><option>mute</option></select></div>
+          <div class="col-4"><label class="form-label">Minutes (0 = no limit)</label><input class="form-control" type="number" name="minutes" min="0" max="1440" value="30"></div>
+          <div class="col-4"><label class="form-label">Also lock channels</label><select class="form-select" name="lockdown"><option value="">No</option><option value="1">Yes</option></select></div>
+          <div class="col-12"><button class="btn btn-danger">Start raid mode</button></div></form>
+      {% endif %}
+      </div></div>
+
+    <div class="card mb-3"><div class="card-header"><h3 class="card-title">Automatic raid trigger</h3></div>
+      <form method="post" action="/raid/config" class="card-body row g-2"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <div class="col-4"><label class="form-label">Watch for raids</label><select class="form-select" name="enabled"><option value="1" {% if c.raid.enabled %}selected{% endif %}>Yes</option><option value="0" {% if not c.raid.enabled %}selected{% endif %}>No</option></select></div>
+        <div class="col-4"><label class="form-label">Joins</label><input class="form-control" type="number" name="joins" min="2" max="100" value="{{ c.raid.joins }}"></div>
+        <div class="col-4"><label class="form-label">Within (seconds)</label><input class="form-control" type="number" name="seconds" min="2" max="600" value="{{ c.raid.seconds }}"></div>
+        <div class="col-4"><label class="form-label">Then new members get</label><select class="form-select" name="action">{% for a in ['kick', 'ban', 'mute'] %}<option {% if c.raid.action == a %}selected{% endif %}>{{ a }}</option>{% endfor %}</select></div>
+        <div class="col-4"><label class="form-label">Lasts (minutes)</label><input class="form-control" type="number" name="minutes" min="1" max="1440" value="{{ c.raid.minutes }}"></div>
+        <div class="col-4"><label class="form-label">Also lock channels</label><select class="form-select" name="lockdown"><option value="0" {% if not c.raid.lockdown %}selected{% endif %}>No</option><option value="1" {% if c.raid.lockdown %}selected{% endif %}>Yes</option></select></div>
+        <div class="col-12"><button class="btn btn-primary">Save</button></div></form></div>
+
+    <div class="card"><div class="card-header"><h3 class="card-title">Join gate</h3></div>
+      <form method="post" action="/joingate" class="card-body row g-2"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <div class="col-4"><label class="form-label">Minimum account age (days)</label><input class="form-control" type="number" name="min_age_days" min="0" max="365" value="{{ c.joingate.min_age_days }}"></div>
+        <div class="col-4"><label class="form-label">Young accounts get</label><select class="form-select" name="action">{% for a in ['kick', 'ban', 'mute'] %}<option {% if c.joingate.action == a %}selected{% endif %}>{{ a }}</option>{% endfor %}</select></div>
+        <div class="col-4"><label class="form-label">No profile picture</label><select class="form-select" name="no_avatar"><option value="0" {% if not c.joingate.no_avatar %}selected{% endif %}>Allowed</option><option value="1" {% if c.joingate.no_avatar %}selected{% endif %}>Turned away</option></select></div>
+        <div class="col-12 form-hint">0 days turns the age check off. Staff are never turned away.</div>
+        <div class="col-12"><button class="btn btn-primary">Save</button></div></form></div>
+  </div>
+</div>
+{% endblock %}

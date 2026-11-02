@@ -8,6 +8,7 @@ import discord
 import itsdangerous
 from fastapi.testclient import TestClient
 
+import modtools
 from dashboard import create_app
 from db import DB, SCHEMA
 
@@ -84,6 +85,8 @@ class DashboardTest(unittest.TestCase):
                               base_url="http://localhost", client_secret="x", session_secret=SECRET, transcript_base_url="",
                               ticket_kinds={"game": ("Game", "d", None)}, head_admin=lambda g: None,
                               current_version=self.version, perform_update=self.update, schedule_restart=lambda: self.restarts.append(1))
+        modtools.db = self.db
+        ctx.mod = modtools
         self.client = TestClient(create_app(ctx), follow_redirects=False)
 
     def as_user(self, uid):

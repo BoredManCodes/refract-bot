@@ -89,5 +89,10 @@ Access: the server owner (and anyone in `OWNER_IDS`) can do everything. Everyone
 | members.view | Member list and invite leaderboard |
 | adminlog.post | Post to the public admin log |
 | settings.edit | Choose which roles and channels the bot uses |
+| moderation.view | Moderation cases, a member's full history, and suggestions |
+| moderation.act | Warn, mute, kick, ban, unban, add notes, edit case reasons, clear warnings, decide suggestions (includes view) |
+| moderation.admin | AutoMod rules, lists, warning ladder and exemptions; lockdown, raid mode and join gate; log channels, sticky roles and suggestion setup; delete cases (includes act and view) |
+
+The moderation pages use the same code as the slash commands, so the hierarchy checks, DMs, mod log embeds and timed expiries behave the same. The action form passes through the dashboard member's own roles: they cannot moderate someone whose top role is not below theirs, and nobody can moderate the owner or a role above the bot. Starting a lockdown from the page waits until every channel is done, which can take a while on a big server.
 
 Permissions, the audit log and System (Update and Restart buttons, same as /update and /restart) are owner-only. Every change made from the dashboard is written to the audit log. Forms carry a CSRF token and sessions last 7 days; access is re-checked against the live server roles on every request, so removing a role takes effect at once.

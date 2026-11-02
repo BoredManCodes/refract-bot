@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}History: {{ name }}{% endblock %}
+{% block body %}
+<div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+  <h2 class="mb-0 me-auto">{{ name }} <span class="text-secondary small">{{ uid }}</span></h2>
+  <a class="btn" href="/moderation">All cases</a>
+  {% if can_act %}<form method="post" action="/moderation/user/{{ uid }}/clearwarns" onsubmit="return confirm('Stop their warnings counting towards the ladder?')">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn">Clear active warnings</button></form>{% endif %}
+</div>
+<p class="text-secondary">{% if member %}In the server.{% else %}Not in the server.{% endif %} {% for k, n in counts.items() %}<span class="badge bg-secondary-lt me-1">{{ n }} {{ k }}</span>{% else %}Clean record.{% endfor %}</p>
+{% set edit = True %}{% include "_cases.html" %}
+{% if can_act %}<div class="row"><div class="col-lg-8">{% set prefill = uid %}{% include "_act.html" %}</div></div>{% endif %}
+{% endblock %}

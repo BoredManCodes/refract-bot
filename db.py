@@ -581,3 +581,27 @@ class DB:
         r = self.c.execute("SELECT COALESCE(SUM(vote=1),0) AS up, COALESCE(SUM(vote=-1),0) AS down "
                            "FROM suggestion_votes WHERE suggestion_id=?", (sid,)).fetchone()
         return r["up"], r["down"]
+
+    # dashboard queries
+    def infractions_recent(self, kind=None, user_id=None, limit=100):
+        q, args = "SELECT * FROM infractions WHERE 1=1", []
+        if kind:
+            q += " AND kind=?"
+            args.append(kind)
+        if user_id:
+            q += " AND user_id=?"
+            args.append(user_id)
+        return self.c.execute(q + " ORDER BY id DESC LIMIT ?", (*args, limit)).fetchall()
+
+    def infraction_summary(self, since):
+        """Cases opened since `since`, counted per kind."""
+        rows = self.c.execute("SELECT kind, COUNT(*) AS n FROM infractions WHERE datetime(created_at) >= datetime(?) GROUP BY kind",
+                              (iso(since),)).fetchall()
+        return {r["kind"]: r["n"] for r in rows}
+
+    def suggestion_list(self, status=None, limit=100):
+        q, args = "SELECT * FROM suggestions", []
+        if status:
+            q += " WHERE status=?"
+            args.append(status)
+        return self.c.execute(q + " ORDER BY id DESC LIMIT ?", (*args, limit)).fetchall()

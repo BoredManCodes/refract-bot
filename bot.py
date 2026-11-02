@@ -1568,7 +1568,7 @@ def dash_context():
         close_ticket=close_ticket, post_ticket_panel=post_ticket_panel, decide_from_dashboard=decide_from_dashboard,
         open_nominations=open_nominations, start_runoff=start_runoff, set_head=set_head, head_admin=head_admin,
         post_adminlog=post_adminlog, perform_update=perform_update, schedule_restart=schedule_restart,
-        current_version=current_version)
+        current_version=current_version, mod=modtools, suggestions=suggestions)
 
 
 async def start_api():

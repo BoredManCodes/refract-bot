@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Moderation{% endblock %}
+{% block body %}
+<div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+  <h2 class="mb-0 me-auto">Moderation cases</h2>
+  <div class="btn-group">
+    <a class="btn {% if not kind %}btn-primary{% endif %}" href="/moderation?q={{ q|urlencode }}">All</a>
+    {% for k in kinds %}<a class="btn {% if kind == k %}btn-primary{% endif %}" href="/moderation?kind={{ k }}&q={{ q|urlencode }}">{{ k }}</a>{% endfor %}
+  </div>
+  <form method="get" class="d-flex gap-2"><input type="hidden" name="kind" value="{{ kind }}">
+    <input class="form-control" name="q" value="{{ q }}" placeholder="Member name or user ID"><button class="btn">Search</button></form>
+</div>
+<p class="text-secondary">Last 7 days: {% for k, n in week.items() %}<span class="badge bg-secondary-lt me-1">{{ n }} {{ k }}</span>{% else %}no cases{% endfor %}</p>
+{% set edit = False %}{% include "_cases.html" %}
+{% if full %}<p class="text-secondary">Showing the latest {{ rows|length }}. Search or filter to narrow it down.</p>{% endif %}
+{% if can_act %}<div class="row"><div class="col-lg-8">{% set prefill = '' %}{% include "_act.html" %}</div></div>{% endif %}
+{% endblock %}

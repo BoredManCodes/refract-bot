@@ -2,12 +2,13 @@ import asyncio
 import json
 import secrets
 from html import escape
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import discord
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from db import now
 from .core import NAV, PERMS, Denied, Sess, flash, need, resolve_member
 
 router = APIRouter()
@@ -80,6 +81,13 @@ async def index(request: Request, s: Sess = Depends(need())):
         cards.append(("Election", el["status"] if el else "none running", "/elections"))
     if s.access.can("members.view"):
         cards.append(("Members", guild.member_count, "/members"))
+    if s.access.can("moderation.view"):
+        cards.append(("Cases this week", sum(ctx.db.infraction_summary(now() - timedelta(days=7)).values()), "/moderation"))
+        cards.append(("Pending suggestions", len(ctx.db.suggestion_list("pending")), "/suggestions"))
+    if s.access.can("moderation.admin"):
+        cards.append(("AutoMod", "on" if ctx.mod.cfg()["enabled"] else "off", "/automod"))
+        state = "locked down" if ctx.mod.lockdown_info() else "raid mode" if ctx.mod.raid_state().get("on") else "normal"
+        cards.append(("Server state", state, "/lockdown"))
     return render(request, s, "index.html", cards=cards, guild=guild)
 
 

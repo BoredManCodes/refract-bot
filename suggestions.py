@@ -88,16 +88,12 @@ async def suggest(interaction: discord.Interaction, idea: app_commands.Range[str
 group = app_commands.Group(name="suggestion", description="Handle member suggestions")
 
 
-async def decide(interaction, number, status, reason):
-    if not _is_support(interaction.user):
-        return await interaction.response.send_message("Not allowed.", ephemeral=True)
+async def settle(guild, by, number, status, reason):
+    """Record a decision, update the post, write the decision log and DM the author. Returns the status label, or None when there is no such suggestion."""
+    if db.suggestion(number) is None:
+        return None
+    db.decide_suggestion(number, status, by.id, reason[:1000])
     row = db.suggestion(number)
-    if row is None:
-        return await interaction.response.send_message("No such suggestion.", ephemeral=True)
-    await interaction.response.defer(ephemeral=True)
-    db.decide_suggestion(number, status, interaction.user.id, reason[:1000])
-    row = db.suggestion(number)
-    guild = interaction.guild
     up, down = db.suggestion_votes(number)
     ch = guild.get_channel(row["channel_id"] or 0)
     jump = ""
@@ -110,7 +106,7 @@ async def decide(interaction, number, status, reason):
             pass
     colour, label = STATUS[status]
     e = discord.Embed(title=f"Suggestion #{number} {label.lower()}", colour=colour, timestamp=now(), description=row["content"][:1500])
-    e.add_field(name="Decided by", value=interaction.user.mention)
+    e.add_field(name="Decided by", value=by.mention)
     e.add_field(name="Votes", value=f"{up} up, {down} down")
     e.add_field(name="Suggested by", value=f"<@{row['user_id']}>" if not row["anonymous"] else "Anonymous")
     if reason:
@@ -130,6 +126,16 @@ async def decide(interaction, number, status, reason):
                               .add_field(name="Reason", value=reason[:1000] or "No reason given", inline=False))
         except discord.HTTPException:
             pass
+    return label
+
+
+async def decide(interaction, number, status, reason):
+    if not _is_support(interaction.user):
+        return await interaction.response.send_message("Not allowed.", ephemeral=True)
+    if db.suggestion(number) is None:
+        return await interaction.response.send_message("No such suggestion.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    label = await settle(interaction.guild, interaction.user, number, status, reason)
     await interaction.followup.send(f"Suggestion #{number} marked {label.lower()}.", ephemeral=True)
 
 

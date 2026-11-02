@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Suggestions{% endblock %}
+{% block body %}
+<div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+  <h2 class="mb-0 me-auto">Suggestions</h2>
+  <div class="btn-group">{% for k in statuses %}<a class="btn {% if status == k %}btn-primary{% endif %}" href="/suggestions?status={{ k }}">{{ k|capitalize }}</a>{% endfor %}</div>
+</div>
+{% for r in rows %}
+<div class="card mb-3"><div class="card-body">
+  <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+    <h3 class="mb-0 me-auto">#{{ r.id }}</h3>
+    <span class="badge bg-secondary-lt">{{ r.status }}</span>
+    <span class="text-secondary small">{{ r.up }} up, {{ r.down }} down</span>
+  </div>
+  <div class="mb-2" style="white-space:pre-wrap">{{ r.content }}</div>
+  <div class="text-secondary small">By {{ r.author }}{% if r.anonymous %} (posted as Anonymous){% endif %} on {{ r.created|dt }}{% if r.decided_by %}. Decided by {{ r.decided_by }}{% if r.reason %}: {{ r.reason }}{% endif %}{% endif %}</div>
+  {% if can_act %}
+  <form method="post" class="d-flex flex-wrap gap-2 mt-3">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input class="form-control" style="max-width:420px" name="reason" placeholder="Reason (optional)" maxlength="1000">
+    {% for d in decisions %}<button class="btn btn-sm" formaction="/suggestions/{{ r.id }}/{{ d }}">{{ d|capitalize }}</button>{% endfor %}
+  </form>
+  {% endif %}
+</div></div>
+{% else %}<p class="text-secondary">No suggestions.</p>{% endfor %}
+{% endblock %}

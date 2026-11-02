@@ -1,0 +1,18 @@
+<div class="card mb-4"><div class="table-responsive"><table class="table card-table table-vcenter">
+  <thead><tr><th>Case</th><th>Type</th><th>Member</th><th>Reason</th><th>By</th><th>When</th><th></th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr><td>#{{ r.id }}</td>
+    <td><span class="badge {{ 'bg-red-lt' if r.kind in ('kick', 'ban') else 'bg-orange-lt' if r.kind in ('warn', 'mute') else 'bg-secondary-lt' }}">{{ r.kind }}</span>
+      {% if r.active %}<span class="badge bg-green-lt">active</span>{% endif %}</td>
+    <td><a href="/moderation/user/{{ r.user_id }}">{{ r.user }}</a></td>
+    <td style="max-width:360px">{{ r.reason }}{% if r.expires %}<div class="text-secondary small">until {{ r.expires|dt }}</div>{% endif %}
+      {% if can_act and edit %}<details class="mt-1"><summary class="text-secondary small">Edit reason</summary>
+        <form method="post" action="/moderation/case/{{ r.id }}/reason" class="d-flex gap-2 mt-1"><input type="hidden" name="csrf" value="{{ csrf }}">
+          <input class="form-control form-control-sm" name="reason" value="{{ r.reason }}" maxlength="500"><button class="btn btn-sm">Save</button></form></details>{% endif %}</td>
+    <td>{{ r.mod }}{% if r.rule %} <span class="text-secondary small">{{ r.rule }}</span>{% endif %}</td>
+    <td>{{ r.created|dt }}</td>
+    <td>{% if can_delete and edit %}<form method="post" action="/moderation/case/{{ r.id }}/delete" onsubmit="return confirm('Delete case #{{ r.id }} from the record?')">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-sm btn-outline-danger">Delete</button></form>{% endif %}</td></tr>
+  {% else %}<tr><td colspan="7" class="text-secondary">No cases.</td></tr>{% endfor %}
+  </tbody></table></div></div>
