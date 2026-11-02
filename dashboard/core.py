@@ -24,6 +24,7 @@ NAV = [("/", "Overview", None),
        ("/adminlog", "Admin log", "adminlog.post"),
        ("/settings", "Settings", "settings.edit"),
        ("/permissions", "Permissions", "owner"),
+       ("/system", "System", "owner"),
        ("/audit", "Audit log", "owner")]
 
 

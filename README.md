@@ -15,6 +15,8 @@ Staff applications and quarterly Head Admin elections.
 | /adminlog | staff | Post an action and reason to #admin-actions. Owner can set `admin` to log it under another admin's name. |
 | /ticket panel | owner | Post the "Open a ticket" button in the current channel. |
 | /setup | owner | Create the Head Admin role and the four channels (incl. private #mod-log). |
+| /update | owner | Pull the latest code (rolls back if pip or compile fails) and restart if anything changed. |
+| /restart | owner | Restart the bot without updating. |
 
 After an election closes with a winner, the bot schedules the next one (`CYCLE_DAYS` minus 21 days).
 
@@ -64,4 +66,4 @@ Access: the server owner (and anyone in `OWNER_IDS`) can do everything. Everyone
 | adminlog.post | Post to the public admin log |
 | settings.edit | Choose which roles and channels the bot uses |
 
-Permissions and the audit log are owner-only. Every change made from the dashboard is written to the audit log. Forms carry a CSRF token and sessions last 7 days; access is re-checked against the live server roles on every request, so removing a role takes effect at once.
+Permissions, the audit log and System (Update and Restart buttons, same as /update and /restart) are owner-only. Every change made from the dashboard is written to the audit log. Forms carry a CSRF token and sessions last 7 days; access is re-checked against the live server roles on every request, so removing a role takes effect at once.

@@ -519,6 +519,29 @@ async def audit_page(request: Request, s: Sess = Depends(need("owner"))):
     return render(request, s, "audit.html", rows=rows)
 
 
+@router.get("/system")
+async def system_page(request: Request, s: Sess = Depends(need("owner"))):
+    return render(request, s, "system.html", version=await ctx_of(request).current_version(), output=request.session.pop("output", None))
+
+
+@router.post("/system/update")
+async def system_update(request: Request, s: Sess = Depends(need("owner", post=True))):
+    ok, head, detail, changed = await ctx_of(request).perform_update()
+    audit(request, s, "system.update", head)
+    request.session["output"] = f"{head}\n{detail}".strip()
+    if changed:
+        ctx_of(request).schedule_restart()
+        return back(request, "/system", "ok", "Updated. The bot restarts in a couple of seconds; reload this page after a few seconds.")
+    return back(request, "/system", "ok" if ok else "err", head)
+
+
+@router.post("/system/restart")
+async def system_restart(request: Request, s: Sess = Depends(need("owner", post=True))):
+    audit(request, s, "system.restart")
+    ctx_of(request).schedule_restart()
+    return back(request, "/system", "ok", "Restarting. Reload this page after a few seconds.")
+
+
 @router.post("/logout")
 async def logout(request: Request, s: Sess = Depends(need(post=True))):
     request.session.clear()

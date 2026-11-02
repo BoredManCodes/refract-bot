@@ -69,12 +69,21 @@ def cookie(**data):
 
 
 class DashboardTest(unittest.TestCase):
+    async def version(self):
+        return "abc1234 test commit"
+
+    async def update(self):
+        return self.update_result
+
     def setUp(self):
+        self.restarts = []
+        self.update_result = (True, "Updated to `def5678`", "def5678 something", True)
         self.db = ThreadSafeDB()
         self.guild = Guild()
         ctx = SimpleNamespace(bot=SimpleNamespace(application_id=1), db=self.db, guild=lambda: self.guild, owner_ids=set(),
                               base_url="http://localhost", client_secret="x", session_secret=SECRET, transcript_base_url="",
-                              ticket_kinds={"game": ("Game", "d", None)}, head_admin=lambda g: None)
+                              ticket_kinds={"game": ("Game", "d", None)}, head_admin=lambda g: None,
+                              current_version=self.version, perform_update=self.update, schedule_restart=lambda: self.restarts.append(1))
         self.client = TestClient(create_app(ctx), follow_redirects=False)
 
     def as_user(self, uid):
@@ -210,6 +219,39 @@ class DashboardTest(unittest.TestCase):
         self.post("/adminlog", action="", reason="")  # sets an error flash
         self.client.get(f"/tickets/{tid}/messages")
         self.assertIn("Fill in", self.client.get("/adminlog").text)
+
+    def test_system_page_and_buttons_are_owner_only(self):
+        self.db.add_grant("user", STAFF, "settings.edit")
+        self.as_user(STAFF)
+        self.assertEqual(self.client.get("/system").status_code, 403)
+        self.assertEqual(self.post("/system/restart").status_code, 403)
+        self.assertEqual(self.post("/system/update").status_code, 403)
+        self.assertEqual(self.restarts, [])
+
+    def test_restart_button_schedules_a_restart_and_is_audited(self):
+        self.as_user(OWNER)
+        page = self.client.get("/system").text
+        self.assertIn("abc1234 test commit", page)
+        self.assertEqual(self.post("/system/restart").status_code, 303)
+        self.assertEqual(len(self.restarts), 1)
+        self.assertEqual(self.db.recent_audit()[0]["action"], "system.restart")
+
+    def test_update_restarts_only_when_code_changed(self):
+        self.as_user(OWNER)
+        self.post("/system/update")
+        self.assertEqual(len(self.restarts), 1)
+        self.assertIn("def5678 something", self.client.get("/system").text)
+        self.update_result = (True, "Already up to date.", "", False)
+        self.post("/system/update")
+        self.assertEqual(len(self.restarts), 1)
+        self.update_result = (False, "pip install failed, rolled back", "boom", False)
+        self.post("/system/update")
+        self.assertEqual(len(self.restarts), 1)
+
+    def test_restart_needs_csrf(self):
+        self.as_user(OWNER)
+        self.assertEqual(self.client.post("/system/restart").status_code, 400)
+        self.assertEqual(self.restarts, [])
 
 
 if __name__ == "__main__":

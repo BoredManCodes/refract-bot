@@ -1555,7 +1555,8 @@ def dash_context():
         create_ticket=create_ticket, add_ticket_users=add_ticket_users, remove_ticket_user=remove_ticket_user,
         close_ticket=close_ticket, post_ticket_panel=post_ticket_panel, decide_from_dashboard=decide_from_dashboard,
         open_nominations=open_nominations, start_runoff=start_runoff, set_head=set_head, head_admin=head_admin,
-        post_adminlog=post_adminlog)
+        post_adminlog=post_adminlog, perform_update=perform_update, schedule_restart=schedule_restart,
+        current_version=current_version)
 
 
 async def start_api():
@@ -1580,32 +1581,67 @@ async def run(*args):
     return proc.returncode, out.decode(errors="replace").strip()
 
 
-@tree.command(name="update", description="Pull the latest code and restart (owner)", guild=GUILD)
-async def update(interaction: discord.Interaction):
-    if not await staff_only(interaction, owner=True):
-        return
-    await interaction.response.defer()
+async def perform_update():
+    """git pull, install new requirements, compile-check. Returns (ok, headline, detail, changed); rolls back on failure."""
     _, old = await run("git", "rev-parse", "HEAD")
     code, out = await run("git", "pull", "--ff-only")
     if code != 0:
-        return await interaction.followup.send(f"git pull failed:\n```{out[-1500:]}```")
+        return False, "git pull failed", out[-1500:], False
     _, new = await run("git", "rev-parse", "HEAD")
     if new == old:
-        return await interaction.followup.send("Already up to date.")
+        return True, "Already up to date.", "", False
     _, changed = await run("git", "diff", "--name-only", old, new)
     if "requirements.txt" in changed.split():
         code, out = await run(sys.executable, "-m", "pip", "install", "-r", "requirements.txt")
         if code != 0:
             await run("git", "reset", "--hard", old)
-            return await interaction.followup.send(f"pip install failed, rolled back:\n```{out[-1500:]}```")
-    code, out = await run(sys.executable, "-m", "py_compile", "bot.py", "db.py", "tally.py", "tickets.py", "welcome.py", "dashboard/__init__.py", "dashboard/core.py", "dashboard/views.py")
+            return False, "pip install failed, rolled back", out[-1500:], False
+    _, files = await run("git", "ls-files", "*.py")
+    code, out = await run(sys.executable, "-m", "py_compile", *files.split())
     if code != 0:
         await run("git", "reset", "--hard", old)
-        return await interaction.followup.send(f"New code does not compile, rolled back:\n```{out[-1500:]}```")
+        return False, "New code does not compile, rolled back", out[-1500:], False
     _, summary = await run("git", "log", "--oneline", f"{old}..{new}")
-    await interaction.followup.send(f"Updated to `{new[:7]}`, restarting.\n```{summary[-1500:]}```")
+    return True, f"Updated to `{new[:7]}`", summary[-1500:], True
+
+
+async def restart_process():
     await bot.close()
     os.execv(sys.executable, [sys.executable, *sys.argv])
+
+
+def schedule_restart(delay=2.0):
+    """Restart after `delay` seconds, so the caller (a web request) can answer first."""
+    async def later():
+        await asyncio.sleep(delay)
+        await restart_process()
+    bot._restart_task = asyncio.create_task(later())
+
+
+async def current_version():
+    _, out = await run("git", "log", "-1", "--format=%h %s (%cr)")
+    return out
+
+
+@tree.command(name="update", description="Pull the latest code and restart (owner)", guild=GUILD)
+async def update(interaction: discord.Interaction):
+    if not await staff_only(interaction, owner=True):
+        return
+    await interaction.response.defer()
+    ok, head, detail, changed = await perform_update()
+    body = f"\n```{detail}```" if detail else ""
+    if not ok or not changed:
+        return await interaction.followup.send(head + body)
+    await interaction.followup.send(f"{head}, restarting.{body}")
+    await restart_process()
+
+
+@tree.command(name="restart", description="Restart the bot without updating (owner)", guild=GUILD)
+async def restart(interaction: discord.Interaction):
+    if not await staff_only(interaction, owner=True):
+        return
+    await interaction.response.send_message("Restarting.")
+    await restart_process()
 
 
 # ---------- setup ----------
